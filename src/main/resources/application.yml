@@ -1,0 +1,322 @@
+# TradeMaster Event Bus Service Configuration
+# Java 24 + Virtual Threads + Spring Boot 3.5.3
+
+# ✅ Performance Monitoring & SLA Configuration
+
+server:
+  port: 8099
+  servlet:
+    context-path: /event-bus
+  compression:
+    enabled: true
+  http2:
+    enabled: true
+  ssl:
+    enabled: ${SSL_ENABLED:false}
+    key-store: ${SSL_KEYSTORE_PATH:classpath:keystore/event-bus-service.p12}
+    key-store-password: ${SSL_KEYSTORE_PASSWORD:changeit}
+    key-store-type: PKCS12
+    key-alias: ${SSL_KEY_ALIAS:event-bus-service}
+    protocol: TLS
+    enabled-protocols: TLSv1.3,TLSv1.2
+
+spring:
+  application:
+    name: event-bus-service
+  
+  # Spring Cloud Configuration
+  cloud:
+    config:
+      enabled: false  # Disable config server requirement for now
+  
+  # Virtual Threads Configuration (MANDATORY)
+  threads:
+    virtual:
+      enabled: true
+  
+  # Database Configuration
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/trademaster_eventbus}
+    username: ${DATABASE_USERNAME:postgres}
+    password: ${DATABASE_PASSWORD:postgres}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      maximum-pool-size: 10
+      minimum-idle: 2
+      connection-timeout: 10000
+      validation-timeout: 5000
+      idle-timeout: 300000
+      max-lifetime: 600000
+      pool-name: EventBusHikariCP
+
+  # JPA Configuration
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: true
+        use_sql_comments: false
+        jdbc:
+          batch_size: 25
+        order_inserts: true
+        order_updates: true
+  
+  # Liquibase Configuration (MANDATORY)
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.yaml
+    enabled: true
+    drop-first: false
+    default-schema: public
+
+  # Redis Configuration
+  redis:
+    host: ${REDIS_HOST:localhost}
+    port: ${REDIS_PORT:6379}
+    password: ${REDIS_PASSWORD:}
+    database: 2
+    timeout: 5000ms
+    lettuce:
+      pool:
+        max-active: 8
+        max-idle: 8
+        min-idle: 0
+
+  # Kafka Configuration
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      client-id: event-bus-producer
+      acks: all
+      retries: 3
+      batch-size: 16384
+      linger-ms: 5
+      buffer-memory: 33554432
+      compression-type: lz4
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      properties:
+        enable.idempotence: true
+        max.in.flight.requests.per.connection: 1
+    
+    consumer:
+      group-id: event-bus-consumer-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "*"
+    
+    listener:
+      ack-mode: manual_immediate
+      concurrency: 4
+
+# WebSocket Configuration - SECURITY HARDENED
+websocket:
+  allowed-origins: ${WEBSOCKET_ALLOWED_ORIGINS:https://trademaster.com,https://app.trademaster.com,https://localhost:3000}
+  max-text-message-buffer-size: 8192
+  max-binary-message-buffer-size: 8192
+  max-session-idle-timeout: 1800000
+  # ✅ SECURITY: Rate limiting configuration
+  rate-limit:
+    connections-per-ip: 100
+    messages-per-second: 1000
+    burst-limit: 5000
+  # ✅ SECURITY: CORS configuration
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:https://trademaster.com,https://app.trademaster.com}
+    allowed-methods: GET,POST,PUT,DELETE,OPTIONS
+    allowed-headers: Authorization,Content-Type,X-Correlation-ID,X-Request-ID
+    allow-credentials: true
+    max-age: 3600
+
+# TradeMaster Specific Configuration
+trademaster:
+  # Performance Monitoring & SLA Configuration
+  performance:
+    sla:
+      critical.ms: 25      # Critical events: ≤25ms SLA
+      high.ms: 50          # High priority events: ≤50ms SLA
+      standard.ms: 100     # Standard events: ≤100ms SLA
+      background.ms: 500   # Background events: ≤500ms SLA
+      auth.ms: 50          # Authentication: ≤50ms for cached tokens
+      database.ms: 10      # Database operations: ≤10ms per operation
+    monitoring:
+      enabled: true
+      report-interval: 60s # SLA compliance reporting interval
+      alert-threshold: 95  # Alert when SLA compliance drops below 95%
+  
+  # Event Processing Configuration
+  event-processing:
+    critical-sla: 25ms
+    high-priority-sla: 50ms
+    standard-sla: 100ms
+    background-sla: 500ms
+    max-queue-size: 100000
+    processing-threads: 8
+    
+  # WebSocket Configuration
+  websocket:
+    max-connections: 10000
+    heartbeat-interval: 30s
+    connection-timeout: 300s
+    max-idle-time: 1800s
+    message-buffer-size: 8192
+    
+  # Security Configuration
+  security:
+    jwt:
+      secret: ${JWT_SECRET:trademaster-event-bus-secret-key}
+      expiration: 3600s
+    cache:
+      ttl: 900s
+      
+  # Circuit Breaker Configuration
+  circuit-breaker:
+    failure-rate-threshold: 50
+    wait-duration-in-open-state: 60s
+    sliding-window-size: 10
+    minimum-number-of-calls: 5
+    
+  # Correlation Configuration
+  correlation:
+    max-correlations: 100000
+    retention-time: 24h
+    cleanup-interval: 1h
+    
+  # Subscription Configuration
+  subscription:
+    max-subscriptions-per-user: 50
+    session-timeout: 8h
+    cleanup-interval: 30m
+
+# ✅ OPENAPI/SWAGGER CONFIGURATION
+springdoc:
+  api-docs:
+    enabled: true
+    path: /api-docs
+    groups:
+      enabled: true
+  swagger-ui:
+    enabled: true
+    path: /swagger-ui.html
+    tags-sorter: alpha
+    operations-sorter: alpha
+    display-request-duration: true
+    display-operation-id: true
+    default-models-expand-depth: 2
+    default-model-expand-depth: 2
+    doc-expansion: list
+    show-extensions: true
+    show-common-extensions: true
+  group-configs:
+    - group: event-bus-api
+      display-name: Event Bus API
+      paths-to-match: /api/v1/event-bus/**
+    - group: agentos-api
+      display-name: AgentOS Integration API
+      paths-to-match: /api/v1/agentos/**
+
+# ✅ ACTUATOR & MONITORING CONFIGURATION
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,metrics,info,prometheus,circuitbreakers,env,loggers,threaddump,heapdump
+      base-path: /actuator
+      path-mapping:
+        health: health
+        metrics: metrics
+  endpoint:
+    health:
+      show-details: always
+      show-components: always
+      probes:
+        enabled: true
+    metrics:
+      enabled: true
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      prometheus:
+        enabled: true
+  health:
+    circuitbreakers:
+      enabled: true
+    redis:
+      enabled: true
+
+# Logging Configuration
+logging:
+  level:
+    com.trademaster.eventbus: DEBUG
+    org.springframework.kafka: WARN
+    org.springframework.web.socket: INFO
+    org.hibernate.SQL: WARN
+    org.hibernate.type.descriptor.sql.BasicBinder: WARN
+  pattern:
+    console: "%d{yyyy-MM-dd HH:mm:ss} - %msg%n"
+    file: "%d{yyyy-MM-dd HH:mm:ss} [%thread] %-5level %logger{36} - %msg%n"
+  file:
+    name: logs/event-bus-service.log
+
+# Kafka Topic Configuration
+kafka:
+  topics:
+    critical-trading-events:
+      name: critical-trading-events
+      partitions: 4
+      replication-factor: 2
+      config:
+        retention.ms: 86400000
+        compression.type: lz4
+    
+    high-priority-trading-events:
+      name: high-priority-trading-events
+      partitions: 8
+      replication-factor: 2
+      config:
+        retention.ms: 86400000
+        compression.type: lz4
+    
+    standard-trading-events:
+      name: standard-trading-events
+      partitions: 12
+      replication-factor: 2
+      config:
+        retention.ms: 604800000
+        compression.type: lz4
+    
+    background-system-events:
+      name: background-system-events
+      partitions: 6
+      replication-factor: 2
+      config:
+        retention.ms: 2592000000
+        compression.type: lz4
+
+# Performance Tuning
+performance:
+  virtual-threads:
+    max-pool-size: 1000
+    keep-alive-time: 60s
+  
+  connection-pool:
+    initial-size: 5
+    max-active: 20
+    max-idle: 10
+    
+  caching:
+    caffeine:
+      spec: maximumSize=10000,expireAfterWrite=15m
+
+# Error Handling
+error:
+  handling:
+    max-retries: 3
+    retry-delay: 1000ms
+    circuit-breaker-enabled: true

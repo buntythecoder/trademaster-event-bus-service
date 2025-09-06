@@ -1,0 +1,267 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-bus-service
+  namespace: event-bus-production
+  labels:
+    app: event-bus-service
+    environment: production
+    version: "1.0.0"
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: event-bus-service
+      environment: production
+  template:
+    metadata:
+      labels:
+        app: event-bus-service
+        environment: production
+        version: "1.0.0"
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8081"
+        prometheus.io/path: "/actuator/prometheus"
+        config/checksum: "placeholder-for-config-checksum"
+    spec:
+      serviceAccountName: event-bus-service
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
+        seccompProfile:
+          type: RuntimeDefault
+      
+      # ✅ AFFINITY: Spread pods across nodes for high availability
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - event-bus-service
+              topologyKey: kubernetes.io/hostname
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: node-type
+                operator: In
+                values:
+                - compute
+      
+      # ✅ TOLERATIONS: Handle node taints
+      tolerations:
+      - key: "node-type"
+        operator: "Equal"
+        value: "compute"
+        effect: "NoSchedule"
+      
+      containers:
+      - name: event-bus-service
+        image: ghcr.io/trademaster/event-bus-service:latest
+        imagePullPolicy: Always
+        
+        # ✅ SECURITY: Container security context
+        securityContext:
+          runAsNonRoot: true
+          runAsUser: 1001
+          runAsGroup: 1001
+          readOnlyRootFilesystem: true
+          allowPrivilegeEscalation: false
+          capabilities:
+            drop:
+            - ALL
+        
+        # ✅ PORTS: Service and management ports
+        ports:
+        - name: http
+          containerPort: 8080
+          protocol: TCP
+        - name: management
+          containerPort: 8081
+          protocol: TCP
+        
+        # ✅ ENVIRONMENT: Production environment variables
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "production"
+        - name: JAVA_OPTS
+          value: >
+            --enable-preview
+            -Xms1g -Xmx2g
+            -XX:+UseZGC
+            -XX:+UnlockExperimentalVMOptions
+            -XX:MaxGCPauseMillis=50
+            -XX:+UseCompressedOops
+            -XX:+UseCompressedClassPointers
+            -XX:+OptimizeStringConcat
+            -XX:+UseStringDeduplication
+            -Djava.security.egd=file:/dev/./urandom
+            -Djava.net.preferIPv4Stack=true
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-service-secrets
+              key: db-username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-service-secrets
+              key: db-password
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-service-secrets
+              key: redis-password
+        - name: KAFKA_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-service-secrets
+              key: kafka-username
+        - name: KAFKA_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-service-secrets
+              key: kafka-password
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-service-secrets
+              key: jwt-secret
+        
+        # ✅ VOLUMES: Configuration and logging
+        volumeMounts:
+        - name: config-volume
+          mountPath: /opt/trademaster/config
+          readOnly: true
+        - name: logs-volume
+          mountPath: /opt/trademaster/logs
+        - name: tmp-volume
+          mountPath: /tmp
+        
+        # ✅ RESOURCES: Production resource limits
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "3Gi"
+            cpu: "2"
+        
+        # ✅ HEALTH CHECKS: Kubernetes health monitoring
+        livenessProbe:
+          httpGet:
+            path: /actuator/health/liveness
+            port: management
+            scheme: HTTP
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          successThreshold: 1
+          failureThreshold: 3
+        
+        readinessProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: management
+            scheme: HTTP
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 3
+        
+        startupProbe:
+          httpGet:
+            path: /actuator/health/readiness
+            port: management
+            scheme: HTTP
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 5
+          successThreshold: 1
+          failureThreshold: 30
+      
+      # ✅ VOLUMES: Storage configuration
+      volumes:
+      - name: config-volume
+        configMap:
+          name: event-bus-service-config
+      - name: logs-volume
+        emptyDir:
+          sizeLimit: 10Gi
+      - name: tmp-volume
+        emptyDir:
+          sizeLimit: 1Gi
+      
+      # ✅ IMAGE PULL: Registry authentication
+      imagePullSecrets:
+      - name: github-registry-secret
+      
+      # ✅ DNS: Custom DNS configuration
+      dnsPolicy: ClusterFirst
+      restartPolicy: Always
+      
+      # ✅ TERMINATION: Graceful shutdown
+      terminationGracePeriodSeconds: 60
+      
+      # ✅ INIT CONTAINERS: Database migration and health checks
+      initContainers:
+      - name: wait-for-postgres
+        image: postgres:15-alpine
+        env:
+        - name: DB_HOST
+          value: "postgres-cluster"
+        - name: DB_PORT
+          value: "5432"
+        - name: DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-service-secrets
+              key: db-username
+        - name: DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-service-secrets
+              key: db-password
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for PostgreSQL to be ready..."
+          until pg_isready -h $DB_HOST -p $DB_PORT -U $DB_USERNAME; do
+            echo "PostgreSQL is unavailable - sleeping"
+            sleep 2
+          done
+          echo "PostgreSQL is ready!"
+      
+      - name: wait-for-redis
+        image: redis:7-alpine
+        env:
+        - name: REDIS_HOST
+          value: "redis-cluster"
+        - name: REDIS_PORT
+          value: "6379"
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for Redis to be ready..."
+          until redis-cli -h $REDIS_HOST -p $REDIS_PORT ping | grep -q PONG; do
+            echo "Redis is unavailable - sleeping"
+            sleep 2
+          done
+          echo "Redis is ready!"

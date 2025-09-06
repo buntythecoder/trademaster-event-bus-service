@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<suppressions xmlns="https://jeremylong.github.io/DependencyCheck/dependency-suppression.1.3.xsd">
+    
+    <!-- ✅ EXAMPLE SUPPRESSION - Remove or modify as needed -->
+    <!-- 
+    <suppress>
+        <notes><![CDATA[
+        Example: Suppress false positive for test dependencies
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.springframework/spring-test@.*$</packageUrl>
+        <cve>CVE-2018-1258</cve>
+    </suppress>
+    -->
+    
+    <!-- ✅ DEVELOPMENT/TEST ONLY DEPENDENCIES -->
+    <suppress>
+        <notes><![CDATA[
+        Test containers are only used in test scope and don't affect production
+        ]]></notes>
+        <packageUrl regex="true">^pkg:maven/org\.testcontainers/.*@.*$</packageUrl>
+        <vulnerabilityName>CVE-2021-29425</vulnerabilityName>
+    </suppress>
+    
+    <!-- ✅ GRADLE WRAPPER (if applicable) -->
+    <suppress>
+        <notes><![CDATA[
+        Gradle wrapper vulnerabilities are typically build-time only
+        ]]></notes>
+        <filePath regex="true">.*gradle-wrapper\.jar</filePath>
+    </suppress>
+    
+    <!-- ✅ IMPORTANT: Only suppress after careful review -->
+    <!-- Each suppression should include:
+         1. Clear justification in <notes>
+         2. Specific CVE or vulnerability name
+         3. Verification that the vulnerability doesn't apply to our use case
+         4. Date of review and reviewer
+    -->
+    
+</suppressions>

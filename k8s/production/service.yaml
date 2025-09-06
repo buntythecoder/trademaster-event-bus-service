@@ -1,0 +1,57 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-bus-service
+  namespace: event-bus-production
+  labels:
+    app: event-bus-service
+    environment: production
+  annotations:
+    service.beta.kubernetes.io/aws-load-balancer-type: "nlb"
+    service.beta.kubernetes.io/aws-load-balancer-cross-zone-load-balancing-enabled: "true"
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8081"
+    prometheus.io/path: "/actuator/prometheus"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 80
+    targetPort: http
+    protocol: TCP
+  - name: https
+    port: 443
+    targetPort: http
+    protocol: TCP
+  selector:
+    app: event-bus-service
+    environment: production
+  sessionAffinity: ClientIP
+  sessionAffinityConfig:
+    clientIP:
+      timeoutSeconds: 10800
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-bus-service-management
+  namespace: event-bus-production
+  labels:
+    app: event-bus-service
+    environment: production
+    service-type: management
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8081"
+    prometheus.io/path: "/actuator/prometheus"
+spec:
+  type: ClusterIP
+  ports:
+  - name: management
+    port: 8081
+    targetPort: management
+    protocol: TCP
+  selector:
+    app: event-bus-service
+    environment: production

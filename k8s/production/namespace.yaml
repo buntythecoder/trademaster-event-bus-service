@@ -1,0 +1,12 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: event-bus-production
+  labels:
+    name: event-bus-production
+    environment: production
+    service: event-bus-service
+    team: trademaster-engineering
+  annotations:
+    kubernetes.io/managed-by: "trademaster-platform"
+    deployment.kubernetes.io/managed-by: "github-actions"

@@ -1,0 +1,85 @@
+databaseChangeLog:
+  - changeSet:
+      id: 01-create-event-store-table
+      author: trademaster-dev-team
+      changes:
+        - createTable:
+            tableName: event_store
+            columns:
+              - column:
+                  name: event_id
+                  type: UUID
+                  constraints:
+                    primaryKey: true
+                    nullable: false
+              - column:
+                  name: correlation_id
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: event_type
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: priority
+                  type: VARCHAR(20)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: source_service
+                  type: VARCHAR(100)
+                  constraints:
+                    nullable: false
+              - column:
+                  name: target_audience
+                  type: VARCHAR(100)
+              - column:
+                  name: event_payload
+                  type: TEXT
+              - column:
+                  name: headers
+                  type: TEXT
+              - column:
+                  name: processing_status
+                  type: VARCHAR(20)
+                  constraints:
+                    nullable: false
+                  defaultValue: 'PENDING'
+              - column:
+                  name: retry_count
+                  type: INTEGER
+                  constraints:
+                    nullable: false
+                  defaultValue: 0
+              - column:
+                  name: max_retries
+                  type: INTEGER
+                  constraints:
+                    nullable: false
+                  defaultValue: 3
+              - column:
+                  name: processing_start_time
+                  type: TIMESTAMP
+              - column:
+                  name: processing_end_time
+                  type: TIMESTAMP
+              - column:
+                  name: error_message
+                  type: TEXT
+              - column:
+                  name: created_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+                  defaultValueComputed: CURRENT_TIMESTAMP
+              - column:
+                  name: updated_at
+                  type: TIMESTAMP
+                  constraints:
+                    nullable: false
+                  defaultValueComputed: CURRENT_TIMESTAMP
+      rollback:
+        - dropTable:
+            tableName: event_store

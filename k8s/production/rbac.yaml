@@ -1,0 +1,45 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: event-bus-service
+  namespace: event-bus-production
+  labels:
+    app: event-bus-service
+    environment: production
+automountServiceAccountToken: true
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  namespace: event-bus-production
+  name: event-bus-service-role
+  labels:
+    app: event-bus-service
+    environment: production
+rules:
+# ✅ MINIMAL PERMISSIONS: Only necessary permissions for service operation
+- apiGroups: [""]
+  resources: ["configmaps", "secrets"]
+  verbs: ["get", "list"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["create"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: event-bus-service-rolebinding
+  namespace: event-bus-production
+  labels:
+    app: event-bus-service
+    environment: production
+subjects:
+- kind: ServiceAccount
+  name: event-bus-service
+  namespace: event-bus-production
+roleRef:
+  kind: Role
+  name: event-bus-service-role
+  apiGroup: rbac.authorization.k8s.io

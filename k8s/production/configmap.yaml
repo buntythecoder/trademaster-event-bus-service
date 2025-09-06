@@ -1,0 +1,205 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: event-bus-service-config
+  namespace: event-bus-production
+  labels:
+    app: event-bus-service
+    environment: production
+data:
+  application.yml: |
+    # ✅ PRODUCTION CONFIGURATION: Event Bus Service
+    spring:
+      application:
+        name: event-bus-service
+      profiles:
+        active: production
+      threads:
+        virtual:
+          enabled: true
+      
+      # ✅ DATABASE: Production PostgreSQL configuration
+      datasource:
+        url: jdbc:postgresql://postgres-cluster:5432/event_bus_prod
+        username: ${DB_USERNAME}
+        password: ${DB_PASSWORD}
+        hikari:
+          maximum-pool-size: 20
+          minimum-idle: 5
+          connection-timeout: 30000
+          idle-timeout: 600000
+          max-lifetime: 1800000
+          leak-detection-threshold: 60000
+      
+      # ✅ JPA: Production optimization
+      jpa:
+        hibernate:
+          ddl-auto: validate
+        show-sql: false
+        properties:
+          hibernate:
+            dialect: org.hibernate.dialect.PostgreSQL95Dialect
+            jdbc:
+              batch_size: 50
+              batch_versioned_data: true
+            cache:
+              use_second_level_cache: true
+              use_query_cache: true
+            generate_statistics: false
+      
+      # ✅ REDIS: Session and caching configuration
+      redis:
+        host: redis-cluster
+        port: 6379
+        password: ${REDIS_PASSWORD}
+        timeout: 2000ms
+        lettuce:
+          pool:
+            max-active: 8
+            max-idle: 8
+            min-idle: 0
+      
+      # ✅ KAFKA: Event streaming configuration
+      kafka:
+        bootstrap-servers: kafka-cluster:9092
+        security:
+          protocol: SASL_SSL
+        sasl:
+          mechanism: SCRAM-SHA-256
+          jaas:
+            config: org.apache.kafka.common.security.scram.ScramLoginModule required username="${KAFKA_USERNAME}" password="${KAFKA_PASSWORD}";
+        producer:
+          key-serializer: org.apache.kafka.common.serialization.StringSerializer
+          value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+          acks: all
+          retries: 3
+          batch-size: 16384
+          linger-ms: 5
+          buffer-memory: 33554432
+        consumer:
+          key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+          value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+          group-id: event-bus-service-prod
+          auto-offset-reset: latest
+    
+    # ✅ SERVER: Production server configuration
+    server:
+      port: 8080
+      compression:
+        enabled: true
+        mime-types: text/html,text/xml,text/plain,text/css,text/javascript,application/javascript,application/json,application/xml
+        min-response-size: 1024
+      http2:
+        enabled: true
+      tomcat:
+        threads:
+          max: 200
+          min-spare: 10
+        max-connections: 8192
+        accept-count: 100
+    
+    # ✅ MANAGEMENT: Actuator endpoints for monitoring
+    management:
+      server:
+        port: 8081
+      endpoints:
+        web:
+          exposure:
+            include: "health,metrics,info,prometheus,loggers,env"
+      endpoint:
+        health:
+          show-details: always
+          probes:
+            enabled: true
+        metrics:
+          enabled: true
+        prometheus:
+          enabled: true
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+            step: 30s
+        web:
+          server:
+            requests-metric-name: http_server_requests
+    
+    # ✅ LOGGING: Production logging configuration
+    logging:
+      level:
+        root: INFO
+        com.trademaster.eventbus: INFO
+        org.springframework.security: INFO
+        org.hibernate.SQL: WARN
+        io.micrometer: INFO
+      pattern:
+        console: "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level [%X{correlationId:-}] %logger{36} - %msg%n"
+      file:
+        path: "/opt/trademaster/logs"
+        name: "/opt/trademaster/logs/event-bus-service.log"
+        max-size: 100MB
+        max-history: 30
+    
+    # ✅ SECURITY: JWT and authentication configuration
+    security:
+      jwt:
+        secret: ${JWT_SECRET}
+        expiration: 3600000
+        refresh-expiration: 7200000
+      cors:
+        allowed-origins: "https://trademaster.com,https://app.trademaster.com"
+        allowed-methods: "GET,POST,PUT,DELETE,OPTIONS"
+        allowed-headers: "*"
+        allow-credentials: true
+    
+    # ✅ RESILIENCE: Circuit breaker configuration
+    resilience4j:
+      circuitbreaker:
+        instances:
+          database:
+            failure-rate-threshold: 50
+            wait-duration-in-open-state: 30s
+            sliding-window-size: 10
+            minimum-number-of-calls: 5
+          external-service:
+            failure-rate-threshold: 50
+            wait-duration-in-open-state: 60s
+            sliding-window-size: 10
+            minimum-number-of-calls: 5
+          message-queue:
+            failure-rate-threshold: 30
+            wait-duration-in-open-state: 45s
+            sliding-window-size: 20
+            minimum-number-of-calls: 10
+      retry:
+        instances:
+          database:
+            max-attempts: 3
+            wait-duration: 1s
+            exponential-backoff-multiplier: 2
+          external-service:
+            max-attempts: 3
+            wait-duration: 2s
+            exponential-backoff-multiplier: 2
+    
+    # ✅ PERFORMANCE: Application performance configuration
+    trademaster:
+      event-bus:
+        performance:
+          sla-thresholds:
+            critical: 25ms
+            high: 50ms
+            standard: 100ms
+            background: 500ms
+          monitoring:
+            enabled: true
+            window-size: 1000
+            reporting-interval: 60s
+        websocket:
+          max-connections: 10000
+          heartbeat-interval: 30s
+          connection-timeout: 300s
+        agent-os:
+          enabled: true
+          registration-url: "https://agentos.trademaster.com/register"
+          health-check-interval: 30s

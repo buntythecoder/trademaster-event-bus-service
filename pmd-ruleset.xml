@@ -1,0 +1,103 @@
+<?xml version="1.0"?>
+<ruleset name="TradeMaster Event Bus PMD Rules"
+         xmlns="http://pmd.sourceforge.net/ruleset/2.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://pmd.sourceforge.net/ruleset/2.0.0 
+                             https://pmd.sourceforge.io/ruleset_2_0_0.xsd">
+
+    <description>PMD Ruleset for TradeMaster Event Bus Service - Java 24 Compatible</description>
+
+    <!-- ✅ BEST PRACTICES -->
+    <rule ref="category/java/bestpractices.xml">
+        <!-- Exclude rules that conflict with our functional programming approach -->
+        <exclude name="GuardLogStatement"/>
+        <exclude name="AvoidReassigningParameters"/>
+    </rule>
+
+    <!-- ✅ CODE STYLE -->
+    <rule ref="category/java/codestyle.xml">
+        <!-- Allow our naming conventions -->
+        <exclude name="ShortVariable"/>
+        <exclude name="LongVariable"/>
+        <exclude name="ShortClassName"/>
+        <exclude name="ShortMethodName"/>
+        <!-- Allow functional programming style -->
+        <exclude name="OnlyOneReturn"/>
+        <exclude name="AtLeastOneConstructor"/>
+        <exclude name="CallSuperInConstructor"/>
+    </rule>
+
+    <!-- ✅ DESIGN PATTERNS -->
+    <rule ref="category/java/design.xml">
+        <!-- Adjust complexity rules for our standards -->
+        <exclude name="CyclomaticComplexity"/>
+        <exclude name="CognitiveComplexity"/>
+        <exclude name="NPathComplexity"/>
+        <!-- Allow our architecture patterns -->
+        <exclude name="LawOfDemeter"/>
+        <exclude name="LoosePackageCoupling"/>
+    </rule>
+
+    <!-- ✅ CUSTOM COGNITIVE COMPLEXITY RULE -->
+    <rule ref="category/java/design.xml/CognitiveComplexity">
+        <properties>
+            <property name="reportLevel" value="7"/>
+        </properties>
+    </rule>
+
+    <!-- ✅ CUSTOM CYCLOMATIC COMPLEXITY RULE -->
+    <rule ref="category/java/design.xml/CyclomaticComplexity">
+        <properties>
+            <property name="classReportLevel" value="15"/>
+            <property name="methodReportLevel" value="5"/>
+        </properties>
+    </rule>
+
+    <!-- ✅ ERROR PRONE -->
+    <rule ref="category/java/errorprone.xml">
+        <!-- Allow our functional patterns -->
+        <exclude name="BeanMembersShouldSerialize"/>
+        <exclude name="DataflowAnomalyAnalysis"/>
+        <exclude name="NullAssignment"/>
+    </rule>
+
+    <!-- ✅ MULTITHREADING -->
+    <rule ref="category/java/multithreading.xml">
+        <!-- Allow Virtual Threads patterns -->
+        <exclude name="UseConcurrentHashMap"/>
+        <exclude name="AvoidSynchronizedAtMethodLevel"/>
+    </rule>
+
+    <!-- ✅ PERFORMANCE -->
+    <rule ref="category/java/performance.xml">
+        <!-- Allow functional programming patterns -->
+        <exclude name="AvoidInstantiatingObjectsInLoops"/>
+    </rule>
+
+    <!-- ✅ SECURITY -->
+    <rule ref="category/java/security.xml"/>
+
+    <!-- ✅ CUSTOM RULES FOR FUNCTIONAL PROGRAMMING -->
+    <rule name="PreferFunctionalPatterns" 
+          language="java"
+          message="Consider using functional programming patterns instead of imperative constructs"
+          class="net.sourceforge.pmd.lang.rule.xpath.XPathRule">
+        <description>
+            Encourage functional programming patterns over imperative code.
+        </description>
+        <priority>3</priority>
+        <properties>
+            <property name="xpath">
+                <value>
+                    <![CDATA[
+                    //IfStatement[not(ancestor::IfStatement)] |
+                    //ForStatement |
+                    //WhileStatement |
+                    //DoStatement
+                    ]]>
+                </value>
+            </property>
+        </properties>
+    </rule>
+
+</ruleset>

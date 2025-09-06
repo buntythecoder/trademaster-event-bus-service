@@ -1,0 +1,138 @@
+version: '3.8'
+services:
+  # ✅ PROMETHEUS - Metrics Collection
+  prometheus:
+    image: prom/prometheus:v2.55.0
+    container_name: event-bus-prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./monitoring/prometheus:/etc/prometheus
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=200h'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    networks:
+      - monitoring
+    restart: unless-stopped
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.prometheus.rule=Host(`prometheus.trademaster.local`)"
+
+  # ✅ GRAFANA - Visualization and Dashboards
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: event-bus-grafana
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+      - ./monitoring/grafana/dashboards:/var/lib/grafana/dashboards
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=trademaster123
+      - GF_USERS_ALLOW_SIGN_UP=false
+      - GF_SECURITY_ALLOW_EMBEDDING=true
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer
+      - GF_INSTALL_PLUGINS=redis-datasource,grafana-piechart-panel
+      - GF_FEATURE_TOGGLES_ENABLE=ngalert
+      - GF_ALERTING_ENABLED=true
+    networks:
+      - monitoring
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.grafana.rule=Host(`grafana.trademaster.local`)"
+
+  # ✅ ALERTMANAGER - Alert Management
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    container_name: event-bus-alertmanager
+    ports:
+      - "9093:9093"
+    volumes:
+      - ./monitoring/alertmanager:/etc/alertmanager
+      - alertmanager_data:/alertmanager
+    command:
+      - '--config.file=/etc/alertmanager/alertmanager.yml'
+      - '--storage.path=/alertmanager'
+      - '--web.external-url=http://localhost:9093'
+    networks:
+      - monitoring
+    restart: unless-stopped
+    depends_on:
+      - prometheus
+
+  # ✅ NODE EXPORTER - System Metrics
+  node-exporter:
+    image: prom/node-exporter:v1.8.2
+    container_name: event-bus-node-exporter
+    ports:
+      - "9100:9100"
+    volumes:
+      - /proc:/host/proc:ro
+      - /sys:/host/sys:ro
+      - /:/rootfs:ro
+    command:
+      - '--path.procfs=/host/proc'
+      - '--path.rootfs=/rootfs'
+      - '--path.sysfs=/host/sys'
+      - '--collector.filesystem.mount-points-exclude=^/(sys|proc|dev|host|etc)($$|/)'
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ✅ BLACKBOX EXPORTER - Endpoint Monitoring
+  blackbox-exporter:
+    image: prom/blackbox-exporter:v0.25.0
+    container_name: event-bus-blackbox-exporter
+    ports:
+      - "9115:9115"
+    volumes:
+      - ./monitoring/blackbox:/etc/blackbox_exporter
+    command:
+      - '--config.file=/etc/blackbox_exporter/config.yml'
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+  # ✅ CADVISOR - Container Metrics
+  cadvisor:
+    image: gcr.io/cadvisor/cadvisor:v0.49.1
+    container_name: event-bus-cadvisor
+    ports:
+      - "8080:8080"
+    volumes:
+      - /:/rootfs:ro
+      - /var/run:/var/run:ro
+      - /sys:/sys:ro
+      - /var/lib/docker/:/var/lib/docker:ro
+      - /dev/disk/:/dev/disk:ro
+    privileged: true
+    devices:
+      - /dev/kmsg
+    networks:
+      - monitoring
+    restart: unless-stopped
+
+networks:
+  monitoring:
+    driver: bridge
+    name: event-bus-monitoring
+
+volumes:
+  prometheus_data:
+    name: event-bus-prometheus-data
+  grafana_data:
+    name: event-bus-grafana-data
+  alertmanager_data:
+    name: event-bus-alertmanager-data
