@@ -35,7 +35,9 @@ import org.springframework.kafka.annotation.EnableKafka;
  * - Sub-50ms latency for trading order events
  * - 99.99% availability during trading hours
  */
-@SpringBootApplication
+@SpringBootApplication(exclude = {
+    org.springframework.boot.autoconfigure.liquibase.LiquibaseAutoConfiguration.class
+})
 @EnableDiscoveryClient
 @EnableAsync
 @EnableTransactionManagement
