@@ -2,8 +2,8 @@ package com.trademaster.eventbus.controller;
 
 import com.trademaster.eventbus.agentos.EventBusAgent;
 import com.trademaster.eventbus.agentos.EventBusAgent.*;
-import com.trademaster.eventbus.domain.Result;
-import com.trademaster.eventbus.domain.GatewayError;
+import com.trademaster.eventbus.functional.Result;
+import com.trademaster.eventbus.functional.GatewayError;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.ResponseEntity;
@@ -139,19 +139,19 @@ public class AgentOSController {
     public CompletableFuture<ResponseEntity<Map<String, Object>>> registerAgent() {
         return eventBusAgent.initializeAgent()
             .thenApply(result -> result.fold(
-                error -> {
-                    log.error("Agent registration failed: {}", error.message());
-                    return ResponseEntity.status(500).body(Map.of(
-                        "success", false,
-                        "error", error.message(),
-                        "timestamp", Instant.now()
-                    ));
-                },
                 registration -> {
                     log.info("Agent registered successfully: id={}", registration.agentId());
                     return ResponseEntity.ok(Map.of(
                         "success", true,
                         "registration", registration,
+                        "timestamp", Instant.now()
+                    ));
+                },
+                error -> {
+                    log.error("Agent registration failed: {}", error.getMessage());
+                    return ResponseEntity.status(500).body(Map.of(
+                        "success", false,
+                        "error", error.getMessage(),
                         "timestamp", Instant.now()
                     ));
                 }
@@ -252,19 +252,19 @@ public class AgentOSController {
     public CompletableFuture<ResponseEntity<Map<String, Object>>> getAgentHealth() {
         return eventBusAgent.getAgentHealth()
             .thenApply(result -> result.fold(
-                error -> {
-                    log.error("Agent health check failed: {}", error.message());
-                    return ResponseEntity.status(503).body(Map.of(
-                        "success", false,
-                        "error", error.message(),
-                        "timestamp", Instant.now()
-                    ));
-                },
                 health -> {
                     log.debug("Agent health retrieved: status={}", health.status());
                     return ResponseEntity.ok(Map.of(
                         "success", true,
                         "health", health,
+                        "timestamp", Instant.now()
+                    ));
+                },
+                error -> {
+                    log.error("Agent health check failed: {}", error.getMessage());
+                    return ResponseEntity.status(503).body(Map.of(
+                        "success", false,
+                        "error", error.getMessage(),
                         "timestamp", Instant.now()
                     ));
                 }
@@ -459,20 +459,20 @@ public class AgentOSController {
                 
                 return eventBusAgent.handleMCPMessage(message)
                     .thenApply(result -> result.fold(
-                        error -> {
-                            log.error("MCP message handling failed: {}", error.message());
-                            return ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
-                                "success", false,
-                                "error", error.message(),
-                                "timestamp", Instant.now()
-                            ));
-                        },
                         mcpResponse -> {
                             log.info("MCP message handled successfully: id={}, type={}", 
                                 message.id(), message.type());
                             return ResponseEntity.<Map<String, Object>>ok(Map.of(
                                 "success", true,
                                 "response", mcpResponse,
+                                "timestamp", Instant.now()
+                            ));
+                        },
+                        error -> {
+                            log.error("MCP message handling failed: {}", error.getMessage());
+                            return ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
+                                "success", false,
+                                "error", error.getMessage(),
                                 "timestamp", Instant.now()
                             ));
                         }
@@ -660,21 +660,21 @@ public class AgentOSController {
             
             return eventBusAgent.executeCommand(command)
                 .thenApply(result -> result.fold(
-                    error -> {
-                        log.error("Command execution failed: type={}, error={}", commandType, error.message());
-                        return ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
-                            "success", false,
-                            "commandType", commandType,
-                            "error", error.message(),
-                            "timestamp", Instant.now()
-                        ));
-                    },
                     resultMessage -> {
                         log.info("Command executed successfully: type={}, result={}", commandType, resultMessage);
                         return ResponseEntity.<Map<String, Object>>ok(Map.of(
                             "success", true,
                             "commandType", commandType,
                             "result", resultMessage,
+                            "timestamp", Instant.now()
+                        ));
+                    },
+                    error -> {
+                        log.error("Command execution failed: type={}, error={}", commandType, error.getMessage());
+                        return ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
+                            "success", false,
+                            "commandType", commandType,
+                            "error", error.getMessage(),
                             "timestamp", Instant.now()
                         ));
                     }
@@ -832,14 +832,14 @@ public class AgentOSController {
             
             return eventBusAgent.handleMCPMessage(capabilitiesMessage)
                 .thenApply(result -> result.fold(
-                    error -> ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
-                        "success", false,
-                        "error", error.message(),
-                        "timestamp", Instant.now()
-                    )),
                     mcpResponse -> ResponseEntity.<Map<String, Object>>ok(Map.of(
                         "success", true,
                         "capabilities", mcpResponse.data().get("capabilities"),
+                        "timestamp", Instant.now()
+                    )),
+                    error -> ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
+                        "success", false,
+                        "error", error.getMessage(),
                         "timestamp", Instant.now()
                     ))
                 )).join();
@@ -979,14 +979,14 @@ public class AgentOSController {
             
             return eventBusAgent.handleMCPMessage(performanceMessage)
                 .thenApply(result -> result.fold(
-                    error -> ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
-                        "success", false,
-                        "error", error.message(),
-                        "timestamp", Instant.now()
-                    )),
                     mcpResponse -> ResponseEntity.<Map<String, Object>>ok(Map.of(
                         "success", true,
                         "performance", mcpResponse.data().get("performance"),
+                        "timestamp", Instant.now()
+                    )),
+                    error -> ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
+                        "success", false,
+                        "error", error.getMessage(),
                         "timestamp", Instant.now()
                     ))
                 )).join();
@@ -1113,14 +1113,14 @@ public class AgentOSController {
             
             return eventBusAgent.handleMCPMessage(connectionsMessage)
                 .thenApply(result -> result.fold(
-                    error -> ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
-                        "success", false,
-                        "error", error.message(),
-                        "timestamp", Instant.now()
-                    )),
                     mcpResponse -> ResponseEntity.<Map<String, Object>>ok(Map.of(
                         "success", true,
                         "connections", mcpResponse.data().get("connections"),
+                        "timestamp", Instant.now()
+                    )),
+                    error -> ResponseEntity.status(500).<Map<String, Object>>body(Map.of(
+                        "success", false,
+                        "error", error.getMessage(),
                         "timestamp", Instant.now()
                     ))
                 )).join();

@@ -1,7 +1,7 @@
 package com.trademaster.eventbus.service;
 
-import com.trademaster.eventbus.domain.Result;
-import com.trademaster.eventbus.domain.GatewayError;
+import com.trademaster.eventbus.functional.Result;
+import com.trademaster.eventbus.functional.GatewayError;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -71,10 +71,10 @@ public class WebSocketConnectionHandler {
                         sessionId, connection.auth().userDetails().userId());
                     return Result.<Void, GatewayError>success(null);
                 })
-                .orElse(Result.failure(GatewayError.validationError(
+                .orElse(Result.failure(new GatewayError.ValidationError.InvalidInput(
                     "Connection not found for cleanup",
-                    "cleanup-not-found-" + System.currentTimeMillis(),
-                    "WebSocketConnectionHandler"))), 
+                    "sessionId",
+                    sessionId))), 
             virtualThreadExecutor);
     }
     
@@ -85,10 +85,22 @@ public class WebSocketConnectionHandler {
     public Result<WebSocketConnection, GatewayError> getConnection(String sessionId) {
         return java.util.Optional.ofNullable(activeConnections.get(sessionId))
             .map(Result::<WebSocketConnection, GatewayError>success)
-            .orElse(Result.failure(GatewayError.validationError(
+            .orElse(Result.failure(new GatewayError.ValidationError.InvalidInput(
                 "WebSocket session not found",
-                "session-not-found-" + System.currentTimeMillis(),
-                "WebSocketConnectionHandler")));
+                "sessionId",
+                sessionId
+            )));
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Get all active connections for event routing
+     * Cognitive Complexity: 1
+     */
+    public CompletableFuture<Result<Map<String, WebSocketConnection>, GatewayError>> getActiveConnections() {
+        return CompletableFuture.supplyAsync(() -> {
+            Map<String, WebSocketConnection> connections = new java.util.HashMap<>(activeConnections);
+            return Result.<Map<String, WebSocketConnection>, GatewayError>success(connections);
+        }, virtualThreadExecutor);
     }
     
     /**
@@ -150,16 +162,15 @@ public class WebSocketConnectionHandler {
                 } catch (Exception e) {
                     log.error("Failed to create WebSocket connection: {}", e.getMessage());
                     return Result.<WebSocketConnection, GatewayError>failure(
-                        GatewayError.processingError(
+                        new GatewayError.SystemError.InternalServerError(
                             "Connection creation failed: " + e.getMessage(),
-                            "conn-creation-" + System.currentTimeMillis(),
-                            "WebSocketConnectionHandler"));
+                            "conn-creation-" + System.currentTimeMillis()));
                 }
             })
-            .orElse(Result.failure(GatewayError.validationError(
+            .orElse(Result.failure(new GatewayError.ValidationError.InvalidInput(
                 "Invalid session or authentication parameters",
-                "invalid-params-" + System.currentTimeMillis(),
-                "WebSocketConnectionHandler")));
+                "session",
+                "null_or_invalid")));
     }
     
     /**
@@ -231,17 +242,16 @@ public class WebSocketConnectionHandler {
                 } catch (Exception e) {
                     log.error("Failed to force disconnect session: {}", sessionId, e);
                     return Result.<String, GatewayError>failure(
-                        GatewayError.processingError(
+                        new GatewayError.SystemError.InternalServerError(
                             "Failed to disconnect session: " + e.getMessage(),
-                            "disconnect-" + System.currentTimeMillis(),
-                            "WebSocketConnectionHandler"));
+                            "disconnect-" + System.currentTimeMillis()));
                 }
             })
             .orElse(Result.failure(
-                GatewayError.validationError(
+                new GatewayError.ValidationError.InvalidInput(
                     "Session not found: " + sessionId,
-                    "session-not-found-" + System.currentTimeMillis(),
-                    "WebSocketConnectionHandler")));
+                    "sessionId",
+                    sessionId)));
     }
     
     // ✅ IMMUTABLE: WebSocket connection record
@@ -252,7 +262,29 @@ public class WebSocketConnectionHandler {
         Instant establishedTime,
         java.util.Optional<Instant> lastActivityTime,
         ConnectionStatus status
-    ) {}
+    ) {
+        // Convenience methods for WebSocketEventRouter
+        public Set<String> subscriptionTopics() {
+            // Extract from auth result or session attributes
+            return auth.userDetails().permissions().stream()
+                .filter(p -> p.startsWith("SUBSCRIBE_"))
+                .map(p -> p.replace("SUBSCRIBE_", ""))
+                .collect(java.util.stream.Collectors.toSet());
+        }
+        
+        public String userId() {
+            return auth.userDetails().userId();
+        }
+        
+        public Map<String, Object> metadata() {
+            return Map.of(
+                "roles", auth.userDetails().roles(),
+                "permissions", auth.userDetails().permissions(),
+                "sessionId", sessionId,
+                "establishedTime", establishedTime
+            );
+        }
+    }
     
     // ✅ IMMUTABLE: Connection status enum
     public enum ConnectionStatus {

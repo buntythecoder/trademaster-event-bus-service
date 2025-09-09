@@ -285,7 +285,16 @@ public class WebSocketMessageProcessor {
         Map<String, Object> data,
         MessagePriority priority,
         Instant timestamp
-    ) {}
+    ) {
+        // Convenience methods for WebSocketEventRouter
+        public String messageType() {
+            return type;
+        }
+        
+        public Map<String, Object> payload() {
+            return data;
+        }
+    }
     
     public enum MessagePriority {
         LOW, MEDIUM, HIGH, CRITICAL

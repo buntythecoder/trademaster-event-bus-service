@@ -1,7 +1,7 @@
 package com.trademaster.eventbus.service;
 
-import com.trademaster.eventbus.domain.Result;
-import com.trademaster.eventbus.domain.GatewayError;
+import com.trademaster.eventbus.functional.Result;
+import com.trademaster.eventbus.functional.GatewayError;
 import io.github.resilience4j.circuitbreaker.CircuitBreaker;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -53,10 +53,9 @@ public class CircuitBreakerService {
                     }
                 }
                 return Result.<T, GatewayError>failure(
-                    GatewayError.processingError(
+                    new GatewayError.SystemError.InternalServerError(
                         "Database operation failed: " + e.getMessage(),
-                        "db-circuit-" + System.currentTimeMillis(),
-                        operationName));
+                        "DB_CIRCUIT_ERROR"));
             }
         }, virtualThreadExecutor);
     }
@@ -76,10 +75,9 @@ public class CircuitBreakerService {
             } catch (Exception e) {
                 log.error("Message queue operation '{}' failed: {}", operationName, e.getMessage());
                 return Result.<T, GatewayError>failure(
-                    GatewayError.processingError(
+                    new GatewayError.SystemError.InternalServerError(
                         "Message queue operation failed: " + e.getMessage(),
-                        "mq-circuit-" + System.currentTimeMillis(),
-                        operationName));
+                        "MQ_CIRCUIT_ERROR"));
             }
         }, virtualThreadExecutor);
     }
@@ -109,10 +107,9 @@ public class CircuitBreakerService {
                     }
                 }
                 return Result.<T, GatewayError>failure(
-                    GatewayError.serviceUnavailable(
+                    new GatewayError.SystemError.ServiceUnavailable(
                         "External service call failed: " + e.getMessage(),
-                        "ext-circuit-" + System.currentTimeMillis(),
-                        serviceName));
+                        "external-service"));
             }
         }, virtualThreadExecutor);
     }
@@ -132,10 +129,9 @@ public class CircuitBreakerService {
             } catch (Exception e) {
                 log.error("WebSocket operation '{}' failed: {}", operationName, e.getMessage());
                 return Result.<T, GatewayError>failure(
-                    GatewayError.connectionTimeout(
+                    new GatewayError.ConnectionError.ConnectionTimeout(
                         "WebSocket operation failed: " + e.getMessage(),
-                        "ws-circuit-" + System.currentTimeMillis(),
-                        operationName));
+                        java.time.Duration.ofSeconds(30)));
             }
         }, virtualThreadExecutor);
     }
@@ -165,10 +161,9 @@ public class CircuitBreakerService {
                     }
                 }
                 return Result.<T, GatewayError>failure(
-                    GatewayError.processingError(
+                    new GatewayError.SystemError.InternalServerError(
                         "Event processing failed: " + e.getMessage(),
-                        "event-circuit-" + System.currentTimeMillis(),
-                        processingType));
+                        "EVENT_CIRCUIT_ERROR"));
             }
         }, virtualThreadExecutor);
     }
@@ -269,6 +264,20 @@ public class CircuitBreakerService {
             eventProcessingCircuitBreaker.getState().name(),
             Instant.now()
         );
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Record circuit breaker failure
+     */
+    public void recordFailure(String circuitBreakerName, Throwable throwable) {
+        log.error("Circuit breaker {} recorded failure: {}", circuitBreakerName, throwable.getMessage());
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Record circuit breaker success
+     */
+    public void recordSuccess(String circuitBreakerName) {
+        log.debug("Circuit breaker {} recorded success", circuitBreakerName);
     }
     
     /**

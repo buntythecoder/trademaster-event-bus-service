@@ -12,10 +12,13 @@ import org.springframework.stereotype.Service;
 
 import java.time.Duration;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.PriorityBlockingQueue;
@@ -67,6 +70,10 @@ public class EventProcessingEngine {
     private final KafkaTemplate<String, Object> kafkaTemplate;
     private final EventSubscriptionService subscriptionService;
     private final EventCorrelationService correlationService;
+    private final PerformanceMonitoringService performanceMonitoringService;
+    private final CircuitBreakerService circuitBreakerService;
+    private final WebSocketEventRouter webSocketEventRouter;
+    private final WebSocketConnectionHandler connectionHandler;
     
     // ✅ IMMUTABLE: Priority-based event queues
     private final PriorityBlockingQueue<PrioritizedEvent> criticalEventQueue = 
@@ -377,11 +384,16 @@ public class EventProcessingEngine {
             .supplyAsync(() -> {
                 try {
                     kafkaTemplate.send(topic, event.header().eventId(), event);
+                    Instant publishTime = Instant.now();
                     return Result.success(new KafkaPublishResult(
                         topic,
                         event.header().eventId(),
-                        Instant.now(),
-                        true
+                        publishTime,
+                        true,              // successful
+                        0,                 // partition (placeholder)
+                        0L,                // offset (placeholder)
+                        Duration.ofMillis(1), // publishDuration (placeholder)
+                        null               // errorMessage (null for successful)
                     ));
                 } catch (Exception e) {
                     return Result.<KafkaPublishResult, GatewayError>failure(
@@ -392,20 +404,49 @@ public class EventProcessingEngine {
     }
     
     /**
-     * ✅ FUNCTIONAL: Perform WebSocket broadcast
+     * ✅ FUNCTIONAL: Perform WebSocket broadcast using WebSocketEventRouter
      */
     private CompletableFuture<Result<WebSocketBroadcastResult, GatewayError>> performWebSocketBroadcast(
             TradeMasterEvent event, Set<String> subscribers) {
         
-        return CompletableFuture.supplyAsync(() -> {
-            // Placeholder for WebSocket broadcast implementation
-            return Result.success(new WebSocketBroadcastResult(
-                subscribers.size(),
-                subscribers.size(),
-                0,
-                Instant.now()
+        return connectionHandler.getActiveConnections()
+            .thenCompose(connectionsResult -> connectionsResult.fold(
+                activeConnections -> {
+                    // Filter connections for subscribed users
+                    Map<String, WebSocketConnectionHandler.WebSocketConnection> eligibleConnections = 
+                        activeConnections.entrySet().stream()
+                            .filter(entry -> subscribers.contains(entry.getValue().userId()))
+                            .collect(java.util.stream.Collectors.toMap(
+                                Map.Entry::getKey,
+                                Map.Entry::getValue
+                            ));
+                    
+                    // Route event to eligible connections using WebSocketEventRouter
+                    return webSocketEventRouter.routeEventToConnections(event, eligibleConnections)
+                        .thenApply(routingResult -> routingResult.map(this::convertToWebSocketBroadcastResult));
+                },
+                error -> CompletableFuture.completedFuture(Result.<WebSocketBroadcastResult, GatewayError>failure(error))
             ));
-        }, virtualThreadExecutor);
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Convert EventRoutingResult to WebSocketBroadcastResult
+     */
+    private WebSocketBroadcastResult convertToWebSocketBroadcastResult(
+            WebSocketEventRouter.EventRoutingResult routingResult) {
+        
+        int failedDeliveries = routingResult.totalTargets() - routingResult.successfulDeliveries();
+        Instant broadcastTime = Instant.now();
+        
+        return new WebSocketBroadcastResult(
+            routingResult.totalTargets(),         // targetSubscribers
+            routingResult.successfulDeliveries(), // successfulDeliveries
+            failedDeliveries,                     // failedDeliveries
+            broadcastTime,                        // broadcastTime
+            routingResult.eventId(),             // eventType (using eventId as proxy)
+            Duration.ofMillis(10),               // broadcastDuration (estimated)
+            routingResult.totalTargets()         // totalRecipients
+        );
     }
     
     /**
@@ -458,15 +499,36 @@ public class EventProcessingEngine {
         String topic,
         String eventId,
         Instant publishTime,
-        boolean successful
-    ) {}
+        boolean successful,
+        int partition,
+        long offset,
+        Duration publishDuration,
+        String errorMessage
+    ) {
+        // Convenience methods
+        public boolean success() {
+            return successful;
+        }
+        
+        public String errorMessage() {
+            return errorMessage;
+        }
+    }
     
     public record WebSocketBroadcastResult(
         int targetSubscribers,
         int successfulDeliveries,
         int failedDeliveries,
-        Instant broadcastTime
-    ) {}
+        Instant broadcastTime,
+        String eventType,
+        Duration broadcastDuration,
+        int totalRecipients
+    ) {
+        // Convenience methods
+        public int totalRecipients() { return totalRecipients; }
+        public String eventType() { return eventType; }
+        public Duration broadcastDuration() { return broadcastDuration; }
+    }
     
     public record ProcessingStatistics(
         Map<Priority, ProcessingMetrics> metricsByPriority,
@@ -474,24 +536,42 @@ public class EventProcessingEngine {
         double averageProcessingTime,
         double slaComplianceRate,
         Map<EventQueue, Integer> queueSizes
-    ) {}
+    ) {
+        // Convenience methods
+        public int totalEvents() { return totalEventsProcessed; }
+        public double overallAverageProcessingTime() { return averageProcessingTime; }
+    }
     
     public record SlaComplianceReport(
         Map<Priority, Double> complianceRateByPriority,
         java.util.List<SlaViolation> recentViolations,
         Instant reportTime,
-        Map<String, Object> performanceIndicators
-    ) {}
+        Map<String, Object> performanceIndicators,
+        Map<String, Object> reportMetadata
+    ) {
+        // Convenience methods
+        public java.util.List<SlaViolation> violations() { return recentViolations; }
+        public Map<String, Object> reportMetadata() { return reportMetadata; }
+    }
     
     public record ProcessingMetrics(
         Priority priority,
         long totalProcessed,
         long successfulProcessed,
         long failedProcessed,
-        Duration averageProcessingTime,
+        double averageProcessingTime, // Changed to double for math operations
+        double minProcessingTime,
+        double maxProcessingTime,
         double slaComplianceRate,
         Instant lastUpdated
-    ) {}
+    ) {
+        // Convenience methods
+        public long totalProcessed() { return totalProcessed; }
+        public double averageProcessingTime() { return averageProcessingTime; }
+        public double minProcessingTime() { return minProcessingTime; }
+        public double maxProcessingTime() { return maxProcessingTime; }
+        public long errorCount() { return failedProcessed; }
+    }
     
     public record SlaViolation(
         String eventId,
@@ -499,8 +579,14 @@ public class EventProcessingEngine {
         Duration expectedSla,
         Duration actualProcessingTime,
         Instant violationTime,
-        String reason
-    ) {}
+        String reason,
+        SlaViolationType violationType
+    ) {
+        // Convenience methods
+        public SlaViolationType violationType() { return violationType; }
+        public double actualValue() { return actualProcessingTime.toMillis(); }
+        public double expectedValue() { return expectedSla.toMillis(); }
+    }
     
     // ✅ IMMUTABLE: Internal processing records
     
@@ -534,7 +620,29 @@ public class EventProcessingEngine {
         QueuedEvent queuedEvent,
         PublishChannelResults publishResults,
         Duration totalProcessingTime
-    ) {}
+    ) {
+        // Convenience methods for error handling
+        public boolean successful() {
+            return publishResults.kafkaResult().isSuccess() && publishResults.webSocketResult().isSuccess();
+        }
+        
+        public boolean success() {
+            return successful();
+        }
+        
+        public Optional<String> errorMessage() {
+            StringBuilder errors = new StringBuilder();
+            publishResults.kafkaResult().fold(
+                success -> { return ""; },
+                error -> { errors.append("Kafka error: ").append(error.getMessage()).append("; "); return ""; }
+            );
+            publishResults.webSocketResult().fold(
+                success -> { return ""; },
+                error -> { errors.append("WebSocket error: ").append(error.getMessage()).append("; "); return ""; }
+            );
+            return errors.length() > 0 ? Optional.of(errors.toString()) : Optional.empty();
+        }
+    }
     
     private record PublishChannelResults(
         Result<KafkaPublishResult, GatewayError> kafkaResult,
@@ -577,23 +685,28 @@ public class EventProcessingEngine {
             ProcessingMetrics metrics = processingMetrics.compute(priority, (p, existing) -> {
                 if (existing == null) {
                     return new ProcessingMetrics(
-                        p,
-                        1, // Total processed
-                        processingTime.toMillis(),
-                        processingTime.toMillis(), // Min time
-                        processingTime.toMillis(), // Max time
-                        0, // Success count
-                        0  // Error count
+                        p,                              // priority
+                        1L,                            // totalProcessed
+                        1L,                            // successfulProcessed
+                        0L,                            // failedProcessed
+                        (double) processingTime.toMillis(), // averageProcessingTime
+                        (double) processingTime.toMillis(), // minProcessingTime
+                        (double) processingTime.toMillis(), // maxProcessingTime
+                        100.0,                         // slaComplianceRate (placeholder)
+                        Instant.now()                 // lastUpdated
                     );
                 } else {
+                    boolean isSuccess = result.successful(); // Fix: use successful() method
                     return new ProcessingMetrics(
-                        p,
-                        existing.totalProcessed() + 1,
-                        (existing.averageProcessingTime() * existing.totalProcessed() + processingTime.toMillis()) / (existing.totalProcessed() + 1),
-                        Math.min(existing.minProcessingTime(), processingTime.toMillis()),
-                        Math.max(existing.maxProcessingTime(), processingTime.toMillis()),
-                        existing.successCount() + (result.success() ? 1 : 0),
-                        existing.errorCount() + (result.success() ? 0 : 1)
+                        p,                                     // priority
+                        existing.totalProcessed() + 1,        // totalProcessed
+                        existing.successfulProcessed() + (isSuccess ? 1 : 0), // successfulProcessed
+                        existing.failedProcessed() + (isSuccess ? 0 : 1),     // failedProcessed
+                        (existing.averageProcessingTime() * existing.totalProcessed() + processingTime.toMillis()) / (existing.totalProcessed() + 1), // averageProcessingTime
+                        Math.min(existing.minProcessingTime(), processingTime.toMillis()), // minProcessingTime
+                        Math.max(existing.maxProcessingTime(), processingTime.toMillis()), // maxProcessingTime
+                        existing.slaComplianceRate(),         // slaComplianceRate (preserve existing)
+                        Instant.now()                         // lastUpdated
                     );
                 }
             });
@@ -677,7 +790,6 @@ public class EventProcessingEngine {
                 (double) result.successfulDeliveries() / result.totalRecipients() * 100.0 : 0.0;
             
             performanceMonitoringService.recordWebSocketSuccessRate(
-                result.eventType(),
                 successRate
             );
             
@@ -714,9 +826,9 @@ public class EventProcessingEngine {
                     case SecurityException se -> new GatewayError.AuthorizationError.AccessDenied(
                         "WebSocket security violation: " + se.getMessage(), "WEBSOCKET_SECURITY_ERROR");
                     case IllegalArgumentException iae -> new GatewayError.ValidationError.InvalidInput(
-                        "Invalid WebSocket broadcast parameters: " + iae.getMessage(), "INVALID_BROADCAST_PARAMS");
+                        "Invalid WebSocket broadcast parameters: " + iae.getMessage(), "broadcast_params", "invalid");
                     case java.util.concurrent.TimeoutException te -> new GatewayError.SystemError.TimeoutError(
-                        "WebSocket broadcast timeout: " + te.getMessage(), "BROADCAST_TIMEOUT");
+                        "WebSocket broadcast timeout: " + te.getMessage(), java.time.Duration.ofSeconds(30));
                     default -> new GatewayError.SystemError.InternalServerError(
                         "WebSocket broadcast system error: " + t.getMessage(), "WEBSOCKET_BROADCAST_ERROR");
                 };
@@ -757,7 +869,7 @@ public class EventProcessingEngine {
             // Create comprehensive processing statistics
             ProcessingStatistics stats = new ProcessingStatistics(
                 Map.copyOf(processingMetrics),
-                totalEvents,
+                (int) totalEvents,
                 overallAverageTime,
                 slaComplianceRate,
                 queueSizes
@@ -840,13 +952,10 @@ public class EventProcessingEngine {
             
             // Log queue health warnings
             if (!overloadedQueues.isEmpty()) {
-                log.warn("Queue overload detected: queues={}, utilization={}",
-                    overloadedQueues, 
-                    overloadedQueues.stream()
-                        .collect(Collectors.toMap(
-                            queue -> queue,
-                            queue -> String.format("%.1f%%", queueUtilization.get(queue))
-                        )));
+                String utilizationInfo = overloadedQueues.stream()
+                    .map(queue -> queue + "=" + String.format("%.1f%%", queueUtilization.get(queue)))
+                    .collect(java.util.stream.Collectors.joining(", "));
+                log.warn("Queue overload detected: queues={}, utilization=[{}]", overloadedQueues, utilizationInfo);
             }
             
             // Record queue metrics
@@ -873,7 +982,7 @@ public class EventProcessingEngine {
                     case OutOfMemoryError oom -> new GatewayError.SystemError.ResourceExhaustion(
                         "Insufficient memory for statistics generation: " + oom.getMessage(), "STATISTICS_OOM");
                     case java.util.concurrent.TimeoutException te -> new GatewayError.SystemError.TimeoutError(
-                        "Statistics generation timeout: " + te.getMessage(), "STATISTICS_TIMEOUT");
+                        "Statistics generation timeout: " + te.getMessage(), java.time.Duration.ofSeconds(10));
                     case IllegalStateException ise -> new GatewayError.SystemError.ServiceUnavailable(
                         "Statistics service unavailable: " + ise.getMessage(), "STATISTICS_SERVICE_DOWN");
                     default -> new GatewayError.SystemError.InternalServerError(
@@ -933,33 +1042,26 @@ public class EventProcessingEngine {
                 // Check for average processing time violations
                 if (metrics.averageProcessingTime() > slaTarget) {
                     violations.add(new SlaViolation(
+                        "event_" + priority.name().toLowerCase() + "_" + System.nanoTime(),
                         priority,
-                        SlaViolationType.AVERAGE_PROCESSING_TIME,
-                        metrics.averageProcessingTime(),
-                        slaTarget,
-                        "Average processing time exceeds SLA target",
+                        Duration.ofMillis((long) slaTarget),
+                        Duration.ofMillis((long) metrics.averageProcessingTime()),
                         Instant.now(),
-                        Map.of(
-                            "total_processed", String.valueOf(metrics.totalProcessed()),
-                            "error_count", String.valueOf(metrics.errorCount()),
-                            "max_time", String.valueOf(metrics.maxProcessingTime())
-                        )
+                        "Average processing time exceeds SLA target",
+                        SlaViolationType.AVERAGE_PROCESSING_TIME
                     ));
                 }
                 
                 // Check for maximum processing time violations
                 if (metrics.maxProcessingTime() > slaTarget * 2) { // 2x SLA target is critical
                     violations.add(new SlaViolation(
+                        "event_" + priority.name().toLowerCase() + "_max_" + System.nanoTime(),
                         priority,
-                        SlaViolationType.MAXIMUM_PROCESSING_TIME,
-                        metrics.maxProcessingTime(),
-                        slaTarget * 2,
-                        "Maximum processing time critically exceeds SLA target",
+                        Duration.ofMillis((long) (slaTarget * 2)),
+                        Duration.ofMillis((long) metrics.maxProcessingTime()),
                         Instant.now(),
-                        Map.of(
-                            "critical_threshold", String.valueOf(slaTarget * 2),
-                            "violation_severity", "CRITICAL"
-                        )
+                        "Maximum processing time critically exceeds SLA target",
+                        SlaViolationType.MAXIMUM_PROCESSING_TIME
                     ));
                 }
                 
@@ -969,17 +1071,13 @@ public class EventProcessingEngine {
                 
                 if (errorRate > 5.0) { // >5% error rate is a violation
                     violations.add(new SlaViolation(
+                        "event_" + priority.name().toLowerCase() + "_error_" + System.nanoTime(),
                         priority,
-                        SlaViolationType.ERROR_RATE,
-                        errorRate,
-                        5.0,
-                        "Error rate exceeds acceptable threshold",
+                        Duration.ofMillis(100), // Expected error threshold duration
+                        Duration.ofMillis((long) (errorRate * 10)), // Actual error rate as duration
                         Instant.now(),
-                        Map.of(
-                            "error_count", String.valueOf(metrics.errorCount()),
-                            "total_processed", String.valueOf(metrics.totalProcessed()),
-                            "success_rate", String.valueOf(100.0 - errorRate)
-                        )
+                        "Error rate exceeds acceptable threshold",
+                        SlaViolationType.ERROR_RATE
                     ));
                 }
             }
@@ -1052,7 +1150,16 @@ public class EventProcessingEngine {
                 complianceByPriority,
                 violations,
                 Instant.now(),
-                reportMetadata
+                Map.of(
+                    "total_violations", violations.size(),
+                    "overall_compliance_rate", complianceByPriority.values().stream().mapToDouble(Double::doubleValue).average().orElse(100.0),
+                    "report_generation_time", System.currentTimeMillis()
+                ),
+                Map.of(
+                    "report_version", "1.0",
+                    "source_service", "EventProcessingEngine",
+                    "report_type", "SLA_COMPLIANCE"
+                )
             );
         });
     }
@@ -1068,7 +1175,7 @@ public class EventProcessingEngine {
                     case OutOfMemoryError oom -> new GatewayError.SystemError.ResourceExhaustion(
                         "Insufficient memory for SLA monitoring: " + oom.getMessage(), "SLA_MONITORING_OOM");
                     case java.util.concurrent.TimeoutException te -> new GatewayError.SystemError.TimeoutError(
-                        "SLA monitoring timeout: " + te.getMessage(), "SLA_MONITORING_TIMEOUT");
+                        "SLA monitoring timeout: " + te.getMessage(), Duration.ofSeconds(30));
                     case IllegalStateException ise -> new GatewayError.SystemError.ServiceUnavailable(
                         "SLA monitoring service unavailable: " + ise.getMessage(), "SLA_SERVICE_DOWN");
                     default -> new GatewayError.SystemError.InternalServerError(

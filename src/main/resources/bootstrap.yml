@@ -1,34 +1,70 @@
+# ✅ CONSUL BOOTSTRAP CONFIGURATION
+# This file loads before application.yml for Consul integration
+
 spring:
   application:
     name: event-bus-service
   profiles:
     active: ${SPRING_PROFILES_ACTIVE:dev}
+  
+  # ✅ CONSUL CONFIGURATION - Loads configuration from Consul KV store
   cloud:
-    config:
-      uri: ${CONFIG_SERVER_URI:http://localhost:8888}
-      fail-fast: false
+    consul:
+      host: ${CONSUL_HOST:localhost}
+      port: ${CONSUL_PORT:8500}
+      scheme: ${CONSUL_SCHEME:http}
+      
+      # ✅ CONSUL CONFIG MANAGEMENT
+      config:
+        enabled: true
+        format: YAML
+        prefix: config
+        default-context: ${spring.application.name}
+        data-key: data
+        watch:
+          enabled: true
+          delay: 1000
+          wait-time: 55
+        fail-fast: false
+        
+      # ✅ CONSUL SERVICE DISCOVERY  
+      discovery:
+        enabled: true
+        register: true
+        prefer-ip-address: true
+        hostname: ${HOSTNAME:localhost}
+        port: ${SERVER_PORT:8099}
+        service-name: ${spring.application.name}
+        instance-id: ${spring.application.name}:${random.int[10000,99999]}
+        health-check-path: /event-bus/actuator/health
+        health-check-interval: 10s
+        health-check-timeout: 10s
+        health-check-critical-timeout: 30s
+        heartbeat:
+          enabled: true
+        tags:
+          - "version=1.0.0"
+          - "environment=${SPRING_PROFILES_ACTIVE:dev}"
+          - "java=24"
+          - "virtual-threads=enabled"
+          - "sla-critical=25ms"
+          - "microservice=event-bus"
+          - "agentOS=enabled"
+        metadata:
+          management_context-path: /event-bus/actuator
+          health_path: /event-bus/actuator/health
+          metrics_path: /event-bus/actuator/metrics
+          info_path: /event-bus/actuator/info
+          openapi_path: /event-bus/api-docs
+          swagger_path: /event-bus/swagger-ui.html
+          
+      # ✅ CONSUL RETRY CONFIGURATION
       retry:
+        enabled: true
         initial-interval: 1000
-        max-attempts: 6
         max-interval: 2000
+        max-attempts: 6
         multiplier: 1.1
-eureka:
-  instance:
-    prefer-ip-address: true
-    instance-id: ${spring.application.name}:${server.port:8099}
-    hostname: ${HOSTNAME:localhost}
-    health-check-url-path: /actuator/health
-    status-page-url-path: /actuator/info
-    lease-renewal-interval-in-seconds: 10
-    lease-expiration-duration-in-seconds: 30
-  client:
-    service-url:
-      defaultZone: ${EUREKA_SERVICE_URL:http://localhost:8761/eureka}
-    register-with-eureka: true
-    fetch-registry: true
-    initial-instance-info-replication-interval-seconds: 5
-    instance-info-replication-interval-seconds: 10
-    registry-fetch-interval-seconds: 10
 management:
   endpoints:
     web:

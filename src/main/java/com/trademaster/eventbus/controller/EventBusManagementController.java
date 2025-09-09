@@ -1,7 +1,7 @@
 package com.trademaster.eventbus.controller;
 
-import com.trademaster.eventbus.domain.Result;
-import com.trademaster.eventbus.domain.GatewayError;
+import com.trademaster.eventbus.functional.Result;
+import com.trademaster.eventbus.functional.GatewayError;
 import com.trademaster.eventbus.service.PerformanceMonitoringService;
 import com.trademaster.eventbus.service.WebSocketConnectionHandler;
 import com.trademaster.eventbus.service.CircuitBreakerService;
@@ -720,17 +720,16 @@ public class EventBusManagementController {
             Result<String, GatewayError> result = connectionHandler.forceDisconnectSession(sessionId);
             
             Map<String, String> response = result.fold(
+                success -> Map.of(
+                    "sessionId", sessionId,
+                    "status", "SUCCESS",
+                    "message", success
+                ),
                 error -> Map.of(
                     "sessionId", sessionId,
                     "status", "ERROR",
-                    "message", error.message()
-                ),
-                success -> Map.of(
-                    "sessionId", sessionId,
-                    "status", "DISCONNECTED",
-                    "message", success
-                )
-            );
+                    "message", error.getMessage()
+                ));
             
             log.warn("Admin forced disconnection of session {}: {}", sessionId, response.get("status"));
             return ResponseEntity.ok(response);

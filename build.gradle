@@ -32,7 +32,7 @@ repositories {
 }
 
 ext {
-    springCloudVersion = '2023.0.4'
+    springCloudVersion = '2025.0.0'
     testContainersVersion = '1.20.4'
 }
 
@@ -49,10 +49,14 @@ dependencies {
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-ui:2.6.0'
     implementation 'org.springdoc:springdoc-openapi-starter-webmvc-api:2.6.0'
     
-    // ✅ SERVICE DISCOVERY (MANDATORY)
-    implementation 'org.springframework.cloud:spring-cloud-starter-netflix-eureka-client'
-    implementation 'org.springframework.cloud:spring-cloud-starter-config'
+    // ✅ SERVICE DISCOVERY & CONFIGURATION (CONSUL)
+    implementation 'org.springframework.cloud:spring-cloud-starter-consul-discovery'
+    implementation 'org.springframework.cloud:spring-cloud-starter-consul-config'
     implementation 'org.springframework.cloud:spring-cloud-starter-loadbalancer'
+    
+    // ✅ CONSUL ADDITIONAL FEATURES
+    // implementation 'org.springframework.cloud:spring-cloud-starter-consul-bus' // Disabled - not needed for our Event Bus implementation
+    implementation 'org.springframework.boot:spring-boot-starter-actuator'
     
     // ✅ KAFKA INTEGRATION
     implementation 'org.springframework.kafka:spring-kafka'
@@ -93,7 +97,9 @@ dependencies {
     implementation 'com.zaxxer:HikariCP'
     
     // ✅ DATABASE MIGRATIONS (MANDATORY)
-    implementation 'org.liquibase:liquibase-core'
+    // Using Flyway instead of Liquibase
+    implementation 'org.flywaydb:flyway-core'
+    implementation 'org.flywaydb:flyway-database-postgresql'
     
     // ✅ TESTING (MANDATORY >80% COVERAGE)
     testImplementation 'org.springframework.boot:spring-boot-starter-test'

@@ -58,6 +58,13 @@ public class EventCorrelationService {
     // ✅ IMMUTABLE: Event timeline storage for reconstruction
     private final ConcurrentHashMap<String, EventTimeline> eventTimelines = 
         new ConcurrentHashMap<>();
+        
+    // ✅ IMMUTABLE: Distributed traces storage for reconstruction
+    private final ConcurrentHashMap<String, DistributedTrace> distributedTraces = 
+        new ConcurrentHashMap<>();
+        
+    // ✅ DEPENDENCIES: Performance monitoring service
+    private final PerformanceMonitoringService performanceMonitoringService;
     
     // ✅ CONFIGURATION: Correlation retention policy
     private static final Duration CORRELATION_TTL = Duration.ofHours(24);
@@ -209,8 +216,8 @@ public class EventCorrelationService {
     private Result<CorrelationChain, GatewayError> lookupParentCorrelation(String parentCorrelationId) {
         return Optional.ofNullable(activeCorrelations.get(parentCorrelationId))
             .map(Result::<CorrelationChain, GatewayError>success)
-            .orElse(Result.failure(new GatewayError.ConnectionError.NoActiveConnections(
-                "Parent correlation not found: " + parentCorrelationId)));
+            .orElse(Result.failure(new GatewayError.SystemError.InternalServerError(
+                "Parent correlation not found: " + parentCorrelationId, "PARENT_CORRELATION_NOT_FOUND")));
     }
     
     /**
@@ -314,10 +321,13 @@ public class EventCorrelationService {
     
     public record DistributedTrace(
         String traceId,
+        String rootSpanId,
         String sourceService,
         String targetService,
         TradeMasterEvent event,
-        Instant traceTime,
+        Instant startTime,
+        Instant endTime,
+        java.util.List<String> spans,
         Map<String, String> traceMetadata
     ) {}
     
@@ -391,7 +401,7 @@ public class EventCorrelationService {
         CorrelationChain chain = activeCorrelations.get(correlationId);
         
         return Optional.ofNullable(chain)
-            .map(c -> Result.success(
+            .map(c -> Result.<java.util.List<TimelineEntry>, GatewayError>success(
                 c.correlatedEvents().stream()
                     .map(event -> new TimelineEntry(
                         event.eventId(),
@@ -403,8 +413,8 @@ public class EventCorrelationService {
                     ))
                     .collect(java.util.stream.Collectors.toList())
             ))
-            .orElse(Result.failure(new GatewayError.ConnectionError.NoActiveConnections(
-                "No timeline events found for correlation: " + correlationId)));
+            .orElse(Result.<java.util.List<TimelineEntry>, GatewayError>failure(new GatewayError.SystemError.InternalServerError(
+                "No timeline events found for correlation: " + correlationId, "CORRELATION_NOT_FOUND")));
     }
     
     private CompletableFuture<Result<EventTimeline, GatewayError>> buildChronologicalTimeline(Result<java.util.List<TimelineEntry>, GatewayError> eventsResult) {
@@ -475,12 +485,16 @@ public class EventCorrelationService {
             "span_id", java.util.UUID.randomUUID().toString()
         );
         
+        Instant now = Instant.now();
         return Result.success(new DistributedTrace(
             traceId,
+            java.util.UUID.randomUUID().toString(), // rootSpanId
             sourceService,
             targetService,
             event,
-            Instant.now(),
+            now, // startTime
+            now.plusMillis(100), // endTime (estimated)
+            java.util.List.of(traceId), // spans
             traceMetadata
         ));
     }
@@ -497,7 +511,7 @@ public class EventCorrelationService {
                 return isValid ? 
                     Result.success(trace) : 
                     Result.failure(new GatewayError.ValidationError.InvalidInput(
-                        "Invalid distributed trace structure", trace.traceId()));
+                        "Invalid distributed trace structure", "traceId", trace.traceId()));
             }),
             virtualThreadExecutor
         );

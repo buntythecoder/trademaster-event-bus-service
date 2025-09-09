@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.Date;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
@@ -69,6 +70,13 @@ public class ProductionJwtService {
                 .flatMap(this::extractUserContext)
                 .map(this::cacheValidationResult), 
             virtualThreadExecutor);
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Generate JWT token for user (simple version)
+     */
+    public CompletableFuture<Result<String, GatewayError>> generateAccessToken(String userId, java.util.Set<String> roles) {
+        return generateJwtToken(userId, roles.stream().toList(), Map.of());
     }
     
     /**

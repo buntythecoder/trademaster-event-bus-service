@@ -68,15 +68,15 @@ public class CircuitBreakerConfiguration {
         // ✅ EVENT LISTENERS: Production monitoring
         circuitBreaker.getEventPublisher()
             .onStateTransition(event -> 
-                System.out.printf("Database Circuit Breaker state transition: %s -> %s at %s%n", 
+                log.info("Database Circuit Breaker state transition: {} -> {} at {}", 
                     event.getStateTransition().getFromState(),
                     event.getStateTransition().getToState(),
                     event.getCreationTime()))
             .onFailureRateExceeded(event -> 
-                System.out.printf("Database Circuit Breaker failure rate exceeded: %.1f%% at %s%n", 
-                    event.getFailureRate(), event.getCreationTime()))
+                log.warn("Database Circuit Breaker failure rate exceeded: {}% at {}", 
+                    String.format("%.1f", event.getFailureRate()), event.getCreationTime()))
             .onCallNotPermitted(event -> 
-                System.out.printf("Database Circuit Breaker call not permitted at %s%n", event.getCreationTime()));
+                log.warn("Database Circuit Breaker call not permitted at {}", event.getCreationTime()));
                 
         return circuitBreaker;
     }
@@ -104,12 +104,12 @@ public class CircuitBreakerConfiguration {
         // ✅ EVENT LISTENERS: Message queue specific monitoring
         circuitBreaker.getEventPublisher()
             .onStateTransition(event -> 
-                System.out.printf("Message Queue Circuit Breaker state transition: %s -> %s at %s%n", 
+                log.info("Message Queue Circuit Breaker state transition: {} -> {} at {}", 
                     event.getStateTransition().getFromState(),
                     event.getStateTransition().getToState(),
                     event.getCreationTime()))
             .onCallNotPermitted(event -> 
-                System.out.printf("Message Queue Circuit Breaker blocked call - system overloaded at %s%n", 
+                log.warn("Message Queue Circuit Breaker blocked call - system overloaded at {}", 
                     event.getCreationTime()));
                     
         return circuitBreaker;
@@ -142,12 +142,12 @@ public class CircuitBreakerConfiguration {
         // ✅ EVENT LISTENERS: External service monitoring
         circuitBreaker.getEventPublisher()
             .onStateTransition(event -> 
-                System.out.printf("External Service Circuit Breaker state transition: %s -> %s - External dependency failure%n", 
+                log.warn("External Service Circuit Breaker state transition: {} -> {} - External dependency failure", 
                     event.getStateTransition().getFromState(),
                     event.getStateTransition().getToState()))
             .onFailureRateExceeded(event -> 
-                System.out.printf("External Service Circuit Breaker failure rate %.1f%% exceeded - Circuit OPENED%n", 
-                    event.getFailureRate()));
+                log.error("External Service Circuit Breaker failure rate {}% exceeded - Circuit OPENED", 
+                    String.format("%.1f", event.getFailureRate())));
                     
         return circuitBreaker;
     }
@@ -175,11 +175,11 @@ public class CircuitBreakerConfiguration {
         // ✅ EVENT LISTENERS: WebSocket specific monitoring
         circuitBreaker.getEventPublisher()
             .onStateTransition(event -> 
-                System.out.printf("WebSocket Circuit Breaker state change: %s -> %s%n", 
+                log.info("WebSocket Circuit Breaker state change: {} -> {}", 
                     event.getStateTransition().getFromState(),
                     event.getStateTransition().getToState()))
             .onCallNotPermitted(event -> 
-                System.out.println("WebSocket Circuit Breaker rejecting connection - system protection active"));
+                log.warn("WebSocket Circuit Breaker rejecting connection - system protection active"));
                 
         return circuitBreaker;
     }
@@ -207,12 +207,12 @@ public class CircuitBreakerConfiguration {
         // ✅ EVENT LISTENERS: Event processing monitoring
         circuitBreaker.getEventPublisher()
             .onStateTransition(event -> 
-                System.out.printf("Event Processing Circuit Breaker state change: %s -> %s - Processing pipeline affected%n", 
+                log.warn("Event Processing Circuit Breaker state change: {} -> {} - Processing pipeline affected", 
                     event.getStateTransition().getFromState(),
                     event.getStateTransition().getToState()))
             .onSlowCallRateExceeded(event -> 
-                System.out.printf("Event Processing Circuit Breaker slow call rate exceeded: %.1f%%%n", 
-                    event.getSlowCallRate()));
+                log.warn("Event Processing Circuit Breaker slow call rate exceeded: {}%", 
+                    String.format("%.1f", event.getSlowCallRate())));
                     
         return circuitBreaker;
     }
@@ -229,7 +229,7 @@ public class CircuitBreakerConfiguration {
             CircuitBreaker eventProcessingCircuitBreaker) {
         
         CircuitBreakerRegistry registry = CircuitBreakerRegistry.ofDefaults();
-        registry.addConfiguration("default", CircuitBreakerConfig.ofDefaults());
+        registry.addConfiguration("trademaster-standard", CircuitBreakerConfig.ofDefaults());
         
         return registry;
     }

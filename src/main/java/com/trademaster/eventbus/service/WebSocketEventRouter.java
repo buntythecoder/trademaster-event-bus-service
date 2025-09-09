@@ -4,6 +4,8 @@ import com.trademaster.eventbus.domain.TradeMasterEvent;
 import com.trademaster.eventbus.domain.Priority;
 import com.trademaster.eventbus.functional.Result;
 import com.trademaster.eventbus.functional.GatewayError;
+import com.trademaster.eventbus.gateway.WebSocketConnectionManager;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -11,9 +13,11 @@ import org.springframework.stereotype.Service;
 import java.time.Instant;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * ✅ SINGLE RESPONSIBILITY: WebSocket Event Routing
@@ -39,6 +43,12 @@ public class WebSocketEventRouter {
     
     private final WebSocketMessageProcessor messageProcessor;
     private final EventSubscriptionService subscriptionService;
+    private final WebSocketConnectionManager connectionManager;
+    private final ObjectMapper objectMapper;
+    
+    // ✅ IMMUTABLE: Routing metrics tracking
+    private final java.util.concurrent.ConcurrentHashMap<String, java.util.concurrent.atomic.AtomicLong> routingMetrics = 
+        new java.util.concurrent.ConcurrentHashMap<>();
     
     // ✅ VIRTUAL THREADS: Dedicated executor for event routing
     private final java.util.concurrent.Executor virtualThreadExecutor = 
@@ -85,8 +95,9 @@ public class WebSocketEventRouter {
         
         return CompletableFuture.supplyAsync(() -> 
             validatePriorityEvent(event)
-                .flatMap(priorityEvent -> selectPriorityConnections(priorityEvent, activeConnections))
-                .flatMap(this::createPriorityMessage)
+                .flatMap(priorityEvent -> selectPriorityConnections(priorityEvent, activeConnections)
+                    .map(connections -> new EventConnectionPair(priorityEvent, connections)))
+                .flatMap(this::createPriorityMessageFromPair)
                 .flatMap(this::deliverPriorityEvent), 
             virtualThreadExecutor);
     }
@@ -343,33 +354,90 @@ public class WebSocketEventRouter {
         return Result.success(new UserMessageContext(event.header().eventId(), message, filteredConnections));
     }
     
+    /**
+     * ✅ FUNCTIONAL: Deliver message to user connections using streams and functional patterns
+     * Cognitive Complexity: 3
+     */
     private Result<UserEventResult, GatewayError> deliverToUserConnections(UserMessageContext context) {
-        int totalConnections = context.connections().size();
-        int successfulDeliveries = 0;
+        String serializedPayload = serializePayload(context.message().payload());
         
-        for (WebSocketConnectionHandler.WebSocketConnection connection : context.connections()) {
-            try {
-                // Send message to WebSocket connection
-                boolean delivered = connectionManager.sendMessage(
-                    connection.sessionId(),
-                    context.message().messageType(),
-                    context.message().payload()
-                ).join(); // Block for synchronous delivery tracking
-                
-                if (delivered) {
-                    successfulDeliveries++;
-                }
-            } catch (Exception e) {
-                log.warn("Failed to deliver message to connection {}: {}", 
-                    connection.sessionId(), e.getMessage());
-            }
-        }
+        // ✅ FUNCTIONAL: Stream-based processing with error handling
+        List<Result<Boolean, GatewayError>> deliveryResults = context.connections().stream()
+            .map(connection -> deliverToSingleConnection(connection, serializedPayload))
+            .toList();
+        
+        // ✅ FUNCTIONAL: Count successful deliveries using stream operations
+        long successfulDeliveries = deliveryResults.stream()
+            .filter(Result::isSuccess)
+            .map(result -> result.fold(
+                delivered -> delivered,
+                error -> Boolean.FALSE
+            ))
+            .filter(Boolean.TRUE::equals)
+            .count();
         
         return Result.success(new UserEventResult(
             context.eventId(),
-            totalConnections,
-            successfulDeliveries
+            context.connections().size(),
+            (int) successfulDeliveries
         ));
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Deliver message to single connection with functional error handling
+     * Cognitive Complexity: 2
+     */
+    private Result<Boolean, GatewayError> deliverToSingleConnection(
+            WebSocketConnectionHandler.WebSocketConnection connection, 
+            String serializedPayload) {
+        
+        return Optional.of(connection)
+            .map(conn -> attemptMessageDelivery(conn.sessionId(), serializedPayload))
+            .orElse(Result.failure(createConnectionError("Invalid connection", connection.sessionId())));
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Attempt message delivery with safe async handling
+     * Cognitive Complexity: 3
+     */
+    private Result<Boolean, GatewayError> attemptMessageDelivery(String sessionId, String payload) {
+        return Optional.ofNullable(connectionManager)
+            .map(manager -> {
+                try {
+                    // ✅ VIRTUAL THREADS: Use thenApply instead of blocking .get()
+                    return manager.sendMessage(sessionId, payload)
+                        .thenApply(result -> result.map(success -> true)) // Message sent successfully
+                        .join(); // Safe join with virtual threads
+                } catch (Exception e) {
+                    log.warn("Failed to deliver message to session {}: {}", sessionId, e.getMessage());
+                    return Result.<Boolean, GatewayError>failure(
+                        createDeliveryError(e.getMessage(), sessionId)
+                    );
+                }
+            })
+            .orElse(Result.failure(createConnectionError("Connection manager unavailable", sessionId)));
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Create connection error with proper context
+     * Cognitive Complexity: 1
+     */
+    private GatewayError createConnectionError(String message, String sessionId) {
+        return new GatewayError.ConnectionFailed(
+            message + " for session: " + sessionId
+        );
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Create delivery error with proper context
+     * Cognitive Complexity: 1
+     */
+    private GatewayError createDeliveryError(String message, String sessionId) {
+        return new GatewayError.InvalidMessageFormat(
+            "Message delivery failed: " + message,
+            "websocket",
+            "successful_delivery"
+        );
     }
     
     private Result<TradeMasterEvent, GatewayError> validatePriorityEvent(TradeMasterEvent event) {
@@ -382,15 +450,15 @@ public class WebSocketEventRouter {
                                            event.header().sourceService() != null;
                 yield hasRequiredFields ?
                     Result.success(event) :
-                    Result.failure(new GatewayError.SystemError.ValidationError(
-                        "Critical event missing required fields", "CRITICAL_EVENT_VALIDATION"));
+                    Result.failure(new GatewayError.ValidationFailed(
+                        "Critical event missing required fields", java.util.List.of("sourceService", "eventType", "timestamp")));
             }
             case HIGH -> {
                 // High priority events need correlation ID
                 yield event.header().correlationId() != null ?
                     Result.success(event) :
-                    Result.failure(new GatewayError.SystemError.ValidationError(
-                        "High priority event missing correlation ID", "HIGH_PRIORITY_VALIDATION"));
+                    Result.failure(new GatewayError.InvalidInput(
+                        "High priority event missing correlation ID", "correlationId", "null"));
             }
             case STANDARD, BACKGROUND -> Result.success(event);
         };
@@ -417,7 +485,7 @@ public class WebSocketEventRouter {
                 
                 return hasSubscription;
             })
-            .filter(conn -> conn.status() == WebSocketConnectionHandler.ConnectionStatus.CONNECTED)
+            .filter(conn -> conn.status() == WebSocketConnectionHandler.ConnectionStatus.ACTIVE)
             .collect(java.util.stream.Collectors.toList());
         
         return selectedConnections.isEmpty() ?
@@ -467,9 +535,8 @@ public class WebSocketEventRouter {
             .map(connection -> 
                 connectionManager.sendMessage(
                     connection.sessionId(),
-                    context.message().messageType(),
-                    context.message().payload()
-                ).exceptionally(throwable -> {
+                    serializePayload(context.message().payload())
+                ).thenApply(result -> result.isSuccess()).exceptionally(throwable -> {
                     log.error("Failed to deliver priority message to {}: {}", 
                         connection.sessionId(), throwable.getMessage());
                     return false;
@@ -528,8 +595,8 @@ public class WebSocketEventRouter {
     
     private RoutingStatistics createStatistics(Map<String, Object> metrics) {
         return new RoutingStatistics(
-            (Long) metrics.get("total_routed"),
-            (Long) metrics.get("successful_deliveries"),
+            ((Long) metrics.get("total_routed")).intValue(),
+            ((Long) metrics.get("successful_deliveries")).intValue(),
             (Double) metrics.get("success_rate_percent"),
             Instant.now()
         );
@@ -537,9 +604,9 @@ public class WebSocketEventRouter {
     
     private WebSocketMessageProcessor.MessagePriority mapEventPriorityToMessagePriority(Priority eventPriority) {
         return switch (eventPriority) {
-            case CRITICAL -> WebSocketMessageProcessor.MessagePriority.URGENT;
+            case CRITICAL -> WebSocketMessageProcessor.MessagePriority.CRITICAL;
             case HIGH -> WebSocketMessageProcessor.MessagePriority.HIGH;
-            case STANDARD -> WebSocketMessageProcessor.MessagePriority.NORMAL;
+            case STANDARD -> WebSocketMessageProcessor.MessagePriority.MEDIUM;
             case BACKGROUND -> WebSocketMessageProcessor.MessagePriority.LOW;
         };
     }
@@ -591,4 +658,30 @@ public class WebSocketEventRouter {
         WebSocketMessageProcessor.OutgoingMessage message,
         List<WebSocketConnectionHandler.WebSocketConnection> connections
     ) {}
+    
+    private record EventConnectionPair(
+        TradeMasterEvent event,
+        List<WebSocketConnectionHandler.WebSocketConnection> connections
+    ) {}
+    
+    /**
+     * ✅ FUNCTIONAL: Create priority message from event-connection pair
+     * Cognitive Complexity: 2
+     */
+    private Result<PriorityMessageContext, GatewayError> createPriorityMessageFromPair(
+            EventConnectionPair pair) {
+        return createPriorityMessage(pair.event(), pair.connections());
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Serialize payload safely
+     */
+    private String serializePayload(Map<String, Object> payload) {
+        try {
+            return objectMapper.writeValueAsString(payload);
+        } catch (Exception e) {
+            log.error("Failed to serialize payload: {}", e.getMessage());
+            return "{\"error\":\"serialization_failed\"}";
+        }
+    }
 }

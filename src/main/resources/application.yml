@@ -24,6 +24,9 @@ spring:
   application:
     name: event-bus-service
   
+  # ✅ SPRING SECURITY CONFIGURATION
+  # Note: ServiceApiKeyFilter handles internal API authentication
+  
   # ✅ CONSUL CONFIG IMPORT (MANDATORY for Spring Boot 2.4+)
   config:
     import: "consul:"
@@ -34,6 +37,9 @@ spring:
   
   # Spring Cloud Consul Configuration
   cloud:
+    # ✅ Disable problematic Spring Cloud Bus function definitions
+    function:
+      definition: ""
     consul:
       host: ${CONSUL_HOST:localhost}
       port: ${CONSUL_PORT:8500}
@@ -217,6 +223,9 @@ trademaster:
       expiration: 3600s
     cache:
       ttl: 900s
+    service:
+      api-key: ${SERVICE_API_KEY:trademaster-service-api-key-2024-secure}
+      enabled: ${SERVICE_AUTH_ENABLED:true}
       
   # Circuit Breaker Configuration
   circuit-breaker:
@@ -236,6 +245,23 @@ trademaster:
     max-subscriptions-per-user: 50
     session-timeout: 8h
     cleanup-interval: 30m
+  
+  # Service Name Configuration
+  service:
+    name: event-bus-service
+  
+  # Service URLs for Internal Communication
+  services:
+    trading-service:
+      url: ${TRADING_SERVICE_URL:http://trading-service:8083}
+    notification-service:
+      url: ${NOTIFICATION_SERVICE_URL:http://notification-service:8084}
+    risk-service:
+      url: ${RISK_SERVICE_URL:http://risk-service:8085}
+    portfolio-service:
+      url: ${PORTFOLIO_SERVICE_URL:http://portfolio-service:8086}
+    audit-service:
+      url: ${AUDIT_SERVICE_URL:http://audit-service:8087}
 
 # ✅ OPENAPI/SWAGGER CONFIGURATION
 springdoc:
@@ -271,7 +297,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health,metrics,info,prometheus,circuitbreakers,env,loggers,threaddump,heapdump,consul,refresh,bus-refresh
+        include: health,metrics,info,prometheus,circuitbreakers,env,loggers,threaddump,heapdump,consul,refresh
       base-path: /actuator
       path-mapping:
         health: health
@@ -295,6 +321,12 @@ management:
       enabled: true
     redis:
       enabled: true
+  tracing:
+    sampling:
+      probability: 1.0
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_ENDPOINT:http://zipkin:9411/api/v2/spans}
 
 # Logging Configuration
 logging:
@@ -366,3 +398,5 @@ error:
     max-retries: 3
     retry-delay: 1000ms
     circuit-breaker-enabled: true
+
+# Zipkin Tracing Configuration (added to existing management section above)
