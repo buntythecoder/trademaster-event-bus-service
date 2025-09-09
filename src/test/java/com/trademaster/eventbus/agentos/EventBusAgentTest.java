@@ -1,7 +1,7 @@
 package com.trademaster.eventbus.agentos;
 
-import com.trademaster.eventbus.domain.Result;
-import com.trademaster.eventbus.domain.GatewayError;
+import com.trademaster.eventbus.functional.Result;
+import com.trademaster.eventbus.functional.GatewayError;
 import com.trademaster.eventbus.service.PerformanceMonitoringService;
 import com.trademaster.eventbus.service.WebSocketConnectionHandler;
 import com.trademaster.eventbus.service.CircuitBreakerService;

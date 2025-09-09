@@ -49,7 +49,9 @@ public class SecurityAuthorizationService {
                         authorized ? java.util.Optional.<String>empty() : 
                                    java.util.Optional.of("WebSocket access not permitted"),
                         ROLE_PERMISSIONS.getOrDefault(getUserRole(userId), Set.of()),
-                        Map.of("operation", operation, "resource", "WEBSOCKET")
+                        Map.of("operation", operation, "resource", "WEBSOCKET"),
+                        Set.of("WEBSOCKET_POLICY", "USER_ROLE_POLICY"),
+                        Map.of("userId", userId, "operation", operation, "resource", "WEBSOCKET")
                     )),
                     error -> Result.<AuthorizationResult, GatewayError>failure(error)
                 ), virtualThreadExecutor);
@@ -69,7 +71,9 @@ public class SecurityAuthorizationService {
                         authorized ? java.util.Optional.<String>empty() : 
                                    java.util.Optional.of("API access not permitted"),
                         ROLE_PERMISSIONS.getOrDefault(getUserRole(userId), Set.of()),
-                        Map.of("operation", operation, "resource", "API")
+                        Map.of("operation", operation, "resource", "API"),
+                        Set.of("API_ACCESS_POLICY", "USER_ROLE_POLICY"),
+                        Map.of("userId", userId, "operation", operation, "resource", "API")
                     )),
                     error -> Result.<AuthorizationResult, GatewayError>failure(error)
                 ), virtualThreadExecutor);
@@ -89,7 +93,9 @@ public class SecurityAuthorizationService {
                         authorized ? java.util.Optional.<String>empty() : 
                                    java.util.Optional.of("External service access not permitted"),
                         ROLE_PERMISSIONS.getOrDefault(getUserRole(userId), Set.of()),
-                        Map.of("target_service", targetService, "resource", "EXTERNAL_SERVICE")
+                        Map.of("target_service", targetService, "resource", "EXTERNAL_SERVICE"),
+                        Set.of("EXTERNAL_SERVICE_POLICY", "USER_ROLE_POLICY", "SERVICE_WHITELIST_POLICY"),
+                        Map.of("userId", userId, "targetService", targetService, "resource", "EXTERNAL_SERVICE")
                     )),
                     error -> Result.<AuthorizationResult, GatewayError>failure(error)
                 ), virtualThreadExecutor);
@@ -137,6 +143,12 @@ public class SecurityAuthorizationService {
         boolean authorized,
         java.util.Optional<String> denialReason,
         Set<String> grantedOperations,
-        Map<String, Object> securityContext
-    ) {}
+        Map<String, Object> securityContext,
+        Set<String> appliedPolicies,
+        Map<String, Object> context
+    ) {
+        // Convenience methods
+        public Set<String> appliedPolicies() { return appliedPolicies; }
+        public Map<String, Object> context() { return context; }
+    }
 }

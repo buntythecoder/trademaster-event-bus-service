@@ -1,0 +1,328 @@
+# Prometheus Configuration for TradeMaster Event Bus Service with Consul Integration
+
+global:
+  scrape_interval: 15s
+  scrape_timeout: 10s
+  evaluation_interval: 15s
+  external_labels:
+    cluster: 'trademaster-eventbus'
+    replica: 'prometheus-1'
+
+rule_files:
+  - "rules/*.yml"
+
+alerting:
+  alertmanagers:
+    - static_configs:
+        - targets:
+          - alertmanager:9093
+
+scrape_configs:
+  # Prometheus Self-Monitoring
+  - job_name: 'prometheus'
+    static_configs:
+      - targets: ['localhost:9090']
+    scrape_interval: 30s
+    metrics_path: /metrics
+
+  # Consul Service Discovery
+  - job_name: 'consul'
+    consul_sd_configs:
+      - server: 'consul-server:8500'
+        datacenter: 'trademaster-dc'
+        services: []
+        tags: []
+        allow_stale: true
+        refresh_interval: 30s
+    relabel_configs:
+      # Keep only services with prometheus scraping enabled
+      - source_labels: [__meta_consul_service_metadata_prometheus_scrape]
+        regex: true
+        action: keep
+      
+      # Use custom metrics path if defined
+      - source_labels: [__meta_consul_service_metadata_prometheus_path]
+        target_label: __metrics_path__
+        regex: (.+)
+        replacement: ${1}
+      
+      # Use custom port if defined
+      - source_labels: [__address__, __meta_consul_service_metadata_prometheus_port]
+        target_label: __address__
+        regex: ([^:]+)(?::\d+)?;(\d+)
+        replacement: ${1}:${2}
+      
+      # Set instance label
+      - source_labels: [__meta_consul_service_id]
+        target_label: instance
+      
+      # Set service label
+      - source_labels: [__meta_consul_service]
+        target_label: service
+      
+      # Set datacenter label
+      - source_labels: [__meta_consul_datacenter]
+        target_label: datacenter
+      
+      # Set node label
+      - source_labels: [__meta_consul_node]
+        target_label: node
+      
+      # Add service tags as labels
+      - source_labels: [__meta_consul_tags]
+        target_label: consul_tags
+        regex: (.*)
+        replacement: ${1}
+
+  # Event Bus Service Direct Scraping (Fallback)
+  - job_name: 'event-bus-service'
+    static_configs:
+      - targets: 
+        - 'event-bus-service:8099'
+    metrics_path: '/event-bus/actuator/prometheus'
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    honor_labels: false
+    honor_timestamps: true
+    scheme: http
+    params:
+      format: ['prometheus']
+    
+    # Custom labels for Event Bus Service
+    metric_relabel_configs:
+      # Add service identification
+      - target_label: service
+        replacement: event-bus-service
+      
+      # Add environment
+      - target_label: environment
+        replacement: docker
+      
+      # Normalize metric names
+      - source_labels: [__name__]
+        regex: 'event_bus_(.*)'
+        target_label: __name__
+        replacement: 'trademaster_eventbus_${1}'
+
+  # Consul Agent Metrics
+  - job_name: 'consul-agent'
+    static_configs:
+      - targets: ['consul-server:8500']
+    metrics_path: /v1/agent/metrics
+    params:
+      format: ['prometheus']
+    scrape_interval: 30s
+    
+    # Consul metrics relabeling
+    metric_relabel_configs:
+      - source_labels: [__name__]
+        regex: 'consul_(.*)'
+        target_label: __name__
+        replacement: 'consul_${1}'
+      
+      - target_label: service
+        replacement: consul
+
+  # PostgreSQL Metrics (with postgres_exporter)
+  - job_name: 'postgres-eventbus'
+    static_configs:
+      - targets: ['postgres-exporter:9187']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    
+    metric_relabel_configs:
+      - target_label: service
+        replacement: postgres-eventbus
+      
+      - target_label: database
+        replacement: trademaster_eventbus
+
+  # Redis Metrics (with redis_exporter)
+  - job_name: 'redis-eventbus'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+    scrape_interval: 15s
+    scrape_timeout: 10s
+    
+    metric_relabel_configs:
+      - target_label: service
+        replacement: redis-eventbus
+      
+      - target_label: database_type
+        replacement: redis
+
+  # Kafka Metrics (with kafka_exporter)
+  - job_name: 'kafka-eventbus'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+    scrape_interval: 30s
+    scrape_timeout: 15s
+    
+    metric_relabel_configs:
+      - target_label: service
+        replacement: kafka-eventbus
+      
+      - target_label: messaging_system
+        replacement: kafka
+
+  # Node Exporter for System Metrics
+  - job_name: 'node-exporter'
+    static_configs:
+      - targets: ['node-exporter:9100']
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    
+    metric_relabel_configs:
+      - target_label: service
+        replacement: node-exporter
+
+  # cAdvisor for Container Metrics
+  - job_name: 'cadvisor'
+    static_configs:
+      - targets: ['cadvisor:8080']
+    metrics_path: /metrics
+    scrape_interval: 30s
+    scrape_timeout: 10s
+    
+    metric_relabel_configs:
+      - target_label: service
+        replacement: cadvisor
+      
+      # Filter container metrics to focus on Event Bus Service
+      - source_labels: [container_label_com_docker_compose_service]
+        regex: 'event-bus-service'
+        target_label: monitored_service
+        replacement: event-bus-service
+
+# Remote Write Configuration (Optional - for long-term storage)
+remote_write:
+  - url: "http://prometheus-remote-storage:9201/write"
+    name: "trademaster-remote"
+    write_relabel_configs:
+      - target_label: cluster
+        replacement: trademaster-eventbus
+    
+    queue_config:
+      capacity: 10000
+      max_shards: 50
+      min_shards: 1
+      max_samples_per_send: 2000
+      batch_send_deadline: 5s
+      min_backoff: 30ms
+      max_backoff: 100ms
+      retry_on_http_429: true
+
+# Recording Rules for Performance Dashboards
+recording_rules:
+  - name: trademaster_eventbus_performance
+    interval: 30s
+    rules:
+      # Event Processing Rate
+      - record: trademaster:eventbus:processing_rate
+        expr: rate(trademaster_eventbus_events_processed_total[5m])
+        labels:
+          service: event-bus-service
+      
+      # SLA Compliance Rate
+      - record: trademaster:eventbus:sla_compliance_rate
+        expr: |
+          (
+            rate(trademaster_eventbus_events_processed_total{status="success"}[5m]) /
+            rate(trademaster_eventbus_events_processed_total[5m])
+          ) * 100
+        labels:
+          service: event-bus-service
+      
+      # Average Response Time by Priority
+      - record: trademaster:eventbus:avg_response_time
+        expr: |
+          rate(trademaster_eventbus_processing_duration_seconds_sum[5m]) /
+          rate(trademaster_eventbus_processing_duration_seconds_count[5m]) * 1000
+        labels:
+          service: event-bus-service
+      
+      # WebSocket Connection Health
+      - record: trademaster:eventbus:websocket_connection_ratio
+        expr: |
+          trademaster_eventbus_websocket_connections_active /
+          trademaster_eventbus_websocket_max_connections * 100
+        labels:
+          service: event-bus-service
+      
+      # Circuit Breaker Health Score
+      - record: trademaster:eventbus:circuit_breaker_health
+        expr: |
+          sum(rate(trademaster_eventbus_circuit_breaker_calls_total{state="closed"}[5m])) /
+          sum(rate(trademaster_eventbus_circuit_breaker_calls_total[5m])) * 100
+        labels:
+          service: event-bus-service
+
+# Alerting Rules
+alerting_rules:
+  - name: trademaster_eventbus_alerts
+    rules:
+      # High SLA Violation Rate
+      - alert: HighSLAViolationRate
+        expr: trademaster:eventbus:sla_compliance_rate < 95
+        for: 2m
+        labels:
+          severity: warning
+          service: event-bus-service
+        annotations:
+          summary: "Event Bus SLA compliance below threshold"
+          description: "SLA compliance rate is {{ $value }}% for the last 5 minutes"
+      
+      # Critical SLA Violation
+      - alert: CriticalSLAViolation
+        expr: trademaster:eventbus:sla_compliance_rate < 90
+        for: 1m
+        labels:
+          severity: critical
+          service: event-bus-service
+        annotations:
+          summary: "Critical Event Bus SLA violation"
+          description: "SLA compliance rate critically low at {{ $value }}%"
+      
+      # High Response Time
+      - alert: HighResponseTime
+        expr: trademaster:eventbus:avg_response_time > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: event-bus-service
+        annotations:
+          summary: "Event Bus response time high"
+          description: "Average response time is {{ $value }}ms"
+      
+      # WebSocket Connection Limit
+      - alert: WebSocketConnectionLimit
+        expr: trademaster:eventbus:websocket_connection_ratio > 90
+        for: 2m
+        labels:
+          severity: warning
+          service: event-bus-service
+        annotations:
+          summary: "WebSocket connections near limit"
+          description: "WebSocket connections at {{ $value }}% of capacity"
+      
+      # Circuit Breaker Open
+      - alert: CircuitBreakerOpen
+        expr: trademaster:eventbus:circuit_breaker_health < 50
+        for: 1m
+        labels:
+          severity: critical
+          service: event-bus-service
+        annotations:
+          summary: "Circuit breakers are open"
+          description: "Circuit breaker health at {{ $value }}%"
+      
+      # Service Down
+      - alert: EventBusServiceDown
+        expr: up{job="event-bus-service"} == 0
+        for: 30s
+        labels:
+          severity: critical
+          service: event-bus-service
+        annotations:
+          summary: "Event Bus Service is down"
+          description: "Event Bus Service has been down for more than 30 seconds"

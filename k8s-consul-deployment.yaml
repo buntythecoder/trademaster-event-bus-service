@@ -1,0 +1,574 @@
+# TradeMaster Event Bus Service - Kubernetes Deployment with Consul
+# Production-ready Kubernetes manifests for Event Bus Service with Consul integration
+
+---
+# Namespace for Event Bus Service
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: trademaster-eventbus
+    app.kubernetes.io/component: namespace
+
+---
+# ConfigMap for Consul Configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: consul-config
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: consul
+    app.kubernetes.io/component: config
+data:
+  consul.json: |
+    {
+      "datacenter": "trademaster-k8s",
+      "server": true,
+      "bootstrap_expect": 3,
+      "ui_config": {
+        "enabled": true
+      },
+      "connect": {
+        "enabled": true
+      },
+      "log_level": "INFO",
+      "retry_join": ["consul-0.consul.trademaster-eventbus.svc.cluster.local", "consul-1.consul.trademaster-eventbus.svc.cluster.local", "consul-2.consul.trademaster-eventbus.svc.cluster.local"],
+      "ports": {
+        "grpc": 8502
+      }
+    }
+
+---
+# Service for Consul Cluster
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: consul
+    app.kubernetes.io/component: service
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  ports:
+    - name: http
+      port: 8500
+      targetPort: 8500
+    - name: grpc
+      port: 8502
+      targetPort: 8502
+    - name: serf-lan
+      port: 8301
+      targetPort: 8301
+    - name: serf-wan
+      port: 8302
+      targetPort: 8302
+    - name: consul-dns
+      port: 8600
+      targetPort: 8600
+      protocol: UDP
+  selector:
+    app.kubernetes.io/name: consul
+
+---
+# Service for Consul UI (External Access)
+apiVersion: v1
+kind: Service
+metadata:
+  name: consul-ui
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: consul
+    app.kubernetes.io/component: ui
+spec:
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 8500
+      targetPort: 8500
+  selector:
+    app.kubernetes.io/name: consul
+
+---
+# StatefulSet for Consul Cluster
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: consul
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: consul
+    app.kubernetes.io/component: statefulset
+spec:
+  serviceName: consul
+  replicas: 3
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: consul
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: consul
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 65534
+        fsGroup: 65534
+      containers:
+      - name: consul
+        image: consul:1.17.0
+        ports:
+        - name: http
+          containerPort: 8500
+        - name: grpc
+          containerPort: 8502
+        - name: serf-lan
+          containerPort: 8301
+        - name: serf-wan
+          containerPort: 8302
+        - name: consul-dns
+          containerPort: 8600
+          protocol: UDP
+        env:
+        - name: CONSUL_LOCAL_CONFIG
+          valueFrom:
+            configMapKeyRef:
+              name: consul-config
+              key: consul.json
+        - name: POD_IP
+          valueFrom:
+            fieldRef:
+              fieldPath: status.podIP
+        - name: NAMESPACE
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.namespace
+        args:
+        - consul
+        - agent
+        - -config-file=/consul/config/consul.json
+        - -data-dir=/consul/data
+        - -bind=$(POD_IP)
+        - -client=0.0.0.0
+        - -advertise=$(POD_IP)
+        - -domain=cluster.local
+        volumeMounts:
+        - name: consul-data
+          mountPath: /consul/data
+        - name: consul-config
+          mountPath: /consul/config
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /v1/status/leader
+            port: 8500
+          initialDelaySeconds: 30
+          periodSeconds: 30
+        readinessProbe:
+          httpGet:
+            path: /v1/status/peers
+            port: 8500
+          initialDelaySeconds: 10
+          periodSeconds: 10
+      volumes:
+      - name: consul-config
+        configMap:
+          name: consul-config
+  volumeClaimTemplates:
+  - metadata:
+      name: consul-data
+    spec:
+      accessModes: ["ReadWriteOnce"]
+      resources:
+        requests:
+          storage: 5Gi
+      storageClassName: fast-ssd
+
+---
+# ConfigMap for Event Bus Service
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: event-bus-config
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: event-bus-service
+    app.kubernetes.io/component: config
+data:
+  application-k8s.yml: |
+    server:
+      port: 8099
+      servlet:
+        context-path: /event-bus
+    
+    spring:
+      application:
+        name: event-bus-service
+      threads:
+        virtual:
+          enabled: true
+      cloud:
+        consul:
+          host: consul.trademaster-eventbus.svc.cluster.local
+          port: 8500
+          discovery:
+            enabled: true
+            prefer-ip-address: false
+            hostname: ${HOSTNAME}.event-bus-service.trademaster-eventbus.svc.cluster.local
+            health-check-path: /event-bus/actuator/health
+            health-check-interval: 10s
+            health-check-timeout: 10s
+            tags:
+              - "version=1.0.0"
+              - "environment=k8s"
+              - "java=24"
+              - "virtual-threads=enabled"
+          config:
+            enabled: true
+            format: YAML
+            watch:
+              enabled: true
+    
+    management:
+      endpoints:
+        web:
+          exposure:
+            include: health,metrics,info,prometheus,circuitbreakers,consul
+      endpoint:
+        health:
+          show-details: always
+          probes:
+            enabled: true
+      metrics:
+        export:
+          prometheus:
+            enabled: true
+
+---
+# Secret for Event Bus Service
+apiVersion: v1
+kind: Secret
+metadata:
+  name: event-bus-secrets
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: event-bus-service
+    app.kubernetes.io/component: secret
+type: Opaque
+data:
+  # Base64 encoded values - replace with actual values
+  jwt-secret: dHJhZGVtYXN0ZXItZXZlbnQtYnVzLXNlY3JldC1rZXkta3VibGV0YWk=
+  postgres-password: cG9zdGdyZXM=
+  redis-password: ""
+
+---
+# Service for Event Bus Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: event-bus-service
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: event-bus-service
+    app.kubernetes.io/component: service
+  annotations:
+    prometheus.io/scrape: "true"
+    prometheus.io/port: "8099"
+    prometheus.io/path: "/event-bus/actuator/prometheus"
+spec:
+  type: LoadBalancer
+  ports:
+  - name: http
+    port: 8099
+    targetPort: 8099
+    protocol: TCP
+  selector:
+    app.kubernetes.io/name: event-bus-service
+
+---
+# Deployment for Event Bus Service
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: event-bus-service
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: event-bus-service
+    app.kubernetes.io/component: deployment
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 1
+      maxSurge: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: event-bus-service
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: event-bus-service
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8099"
+        prometheus.io/path: "/event-bus/actuator/prometheus"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      containers:
+      - name: event-bus-service
+        image: trademaster/event-bus-service:latest
+        imagePullPolicy: Always
+        ports:
+        - name: http
+          containerPort: 8099
+          protocol: TCP
+        env:
+        - name: SPRING_PROFILES_ACTIVE
+          value: "k8s,consul"
+        - name: CONSUL_HOST
+          value: "consul.trademaster-eventbus.svc.cluster.local"
+        - name: CONSUL_PORT
+          value: "8500"
+        - name: DATABASE_URL
+          value: "jdbc:postgresql://postgres-eventbus.trademaster-eventbus.svc.cluster.local:5432/trademaster_eventbus"
+        - name: DATABASE_USERNAME
+          value: "postgres"
+        - name: DATABASE_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-secrets
+              key: postgres-password
+        - name: REDIS_HOST
+          value: "redis-eventbus.trademaster-eventbus.svc.cluster.local"
+        - name: REDIS_PORT
+          value: "6379"
+        - name: REDIS_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-secrets
+              key: redis-password
+        - name: KAFKA_BOOTSTRAP_SERVERS
+          value: "kafka.trademaster-eventbus.svc.cluster.local:9092"
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: event-bus-secrets
+              key: jwt-secret
+        - name: HOSTNAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: JAVA_OPTS
+          value: >
+            --enable-preview
+            -XX:+UseZGC
+            -XX:+UnlockExperimentalVMOptions
+            -XX:+UseTransparentHugePages
+            -Xms1g
+            -Xmx4g
+            -XX:MetaspaceSize=256m
+            -XX:MaxDirectMemorySize=512m
+            -Djava.security.egd=file:/dev/./urandom
+        volumeMounts:
+        - name: event-bus-config
+          mountPath: /app/config
+          readOnly: true
+        - name: event-bus-logs
+          mountPath: /app/logs
+        resources:
+          requests:
+            memory: "2Gi"
+            cpu: "1000m"
+          limits:
+            memory: "4Gi"
+            cpu: "2000m"
+        livenessProbe:
+          httpGet:
+            path: /event-bus/actuator/health/liveness
+            port: 8099
+          initialDelaySeconds: 90
+          periodSeconds: 30
+          timeoutSeconds: 10
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /event-bus/actuator/health/readiness
+            port: 8099
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        startupProbe:
+          httpGet:
+            path: /event-bus/actuator/health
+            port: 8099
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 30
+      volumes:
+      - name: event-bus-config
+        configMap:
+          name: event-bus-config
+      - name: event-bus-logs
+        emptyDir: {}
+      initContainers:
+      - name: wait-for-consul
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for Consul to be ready..."
+          until nc -z consul.trademaster-eventbus.svc.cluster.local 8500; do
+            echo "Consul not ready, waiting..."
+            sleep 5
+          done
+          echo "Consul is ready!"
+      - name: wait-for-postgres
+        image: busybox:1.35
+        command:
+        - sh
+        - -c
+        - |
+          echo "Waiting for PostgreSQL to be ready..."
+          until nc -z postgres-eventbus.trademaster-eventbus.svc.cluster.local 5432; do
+            echo "PostgreSQL not ready, waiting..."
+            sleep 5
+          done
+          echo "PostgreSQL is ready!"
+
+---
+# HorizontalPodAutoscaler for Event Bus Service
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: event-bus-hpa
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: event-bus-service
+    app.kubernetes.io/component: hpa
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: event-bus-service
+  minReplicas: 3
+  maxReplicas: 10
+  metrics:
+  - type: Resource
+    resource:
+      name: cpu
+      target:
+        type: Utilization
+        averageUtilization: 70
+  - type: Resource
+    resource:
+      name: memory
+      target:
+        type: Utilization
+        averageUtilization: 80
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 120
+      policies:
+      - type: Percent
+        value: 100
+        periodSeconds: 60
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+      - type: Percent
+        value: 10
+        periodSeconds: 60
+
+---
+# PodDisruptionBudget for Event Bus Service
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: event-bus-pdb
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: event-bus-service
+    app.kubernetes.io/component: pdb
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: event-bus-service
+
+---
+# NetworkPolicy for Event Bus Service
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: event-bus-network-policy
+  namespace: trademaster-eventbus
+  labels:
+    app.kubernetes.io/name: event-bus-service
+    app.kubernetes.io/component: network-policy
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: event-bus-service
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: consul
+    - namespaceSelector: {}
+    ports:
+    - protocol: TCP
+      port: 8099
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: consul
+    ports:
+    - protocol: TCP
+      port: 8500
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: postgres-eventbus
+    ports:
+    - protocol: TCP
+      port: 5432
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: redis-eventbus
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - podSelector:
+        matchLabels:
+          app.kubernetes.io/name: kafka
+    ports:
+    - protocol: TCP
+      port: 9092
+  - to: []
+    ports:
+    - protocol: TCP
+      port: 53
+    - protocol: UDP
+      port: 53

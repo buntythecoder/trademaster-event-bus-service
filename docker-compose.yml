@@ -12,8 +12,7 @@ services:
     image: trademaster/event-bus-service:1.0.0
     container_name: event-bus-service
     ports:
-      - "8099:8099"    # Main service port
-      - "8090:8090"    # Management port
+      - "8081:8081"    # Main service port
     environment:
       # ✅ VIRTUAL THREADS: Enable Java 24 Virtual Threads
       - JAVA_OPTS=--enable-preview -XX:+UseZGC -XX:MaxRAMPercentage=75.0
@@ -57,7 +56,7 @@ services:
       - ./logs:/app/logs
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8099/event-bus/api/v1/health/live"]
+      test: ["CMD", "curl", "-f", "http://localhost:8081/actuator/health"]
       interval: 30s
       timeout: 5s
       retries: 3
@@ -73,7 +72,7 @@ services:
       - POSTGRES_PASSWORD=eventbus_secure_password
       - POSTGRES_INITDB_ARGS=--encoding=UTF-8 --lc-collate=C --lc-ctype=C
     ports:
-      - "5432:5432"
+      - "5433:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./docker/postgres/init:/docker-entrypoint-initdb.d
@@ -104,7 +103,7 @@ services:
     environment:
       - REDIS_PASSWORD=redis_secure_password
     ports:
-      - "6379:6379"
+      - "6380:6379"
     volumes:
       - redis_data:/data
       - ./docker/redis/redis.conf:/usr/local/etc/redis/redis.conf
@@ -211,7 +210,7 @@ networks:
     driver: bridge
     ipam:
       config:
-        - subnet: 172.20.0.0/16
+        - subnet: 172.21.0.0/16
 
 # ✅ VOLUMES: Persistent data storage
 volumes:

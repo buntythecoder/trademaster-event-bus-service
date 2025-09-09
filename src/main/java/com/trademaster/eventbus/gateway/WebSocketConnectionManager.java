@@ -704,4 +704,66 @@ public class WebSocketConnectionManager {
         connectionMetrics.remove(sessionId);
         log.info("Cleaned up dead connection: {}", sessionId);
     }
+    
+    /**
+     * ✅ FUNCTIONAL: Get active connection count
+     */
+    public int getActiveConnectionCount() {
+        return activeConnections.size();
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Send message to specific connection
+     */
+    public CompletableFuture<Result<Void, GatewayError>> sendMessage(
+            String sessionId, 
+            String message) {
+        
+        log.debug("Sending message to connection: {}", sessionId);
+        
+        return CompletableFuture
+            .supplyAsync(() -> lookupManagedConnection(sessionId), virtualThreadExecutor)
+            .thenApply(connectionResult -> connectionResult.flatMap(connection ->
+                sendMessageToSession(connection.session(), message)))
+            .handle(this::handleMessageSend);
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Send message to WebSocket session
+     */
+    private Result<Void, GatewayError> sendMessageToSession(WebSocketSession session, String message) {
+        return Optional.of(session)
+            .filter(WebSocketSession::isOpen)
+            .map(openSession -> {
+                try {
+                    openSession.sendMessage(new org.springframework.web.socket.TextMessage(message));
+                    return Result.<Void, GatewayError>success(null);
+                } catch (Exception e) {
+                    log.error("Failed to send message to session {}: {}", session.getId(), e.getMessage());
+                    return Result.<Void, GatewayError>failure(
+                        new GatewayError.SystemError.WebSocketError(
+                            "Failed to send WebSocket message: " + e.getMessage(), 
+                            session.getId()));
+                }
+            })
+            .orElse(Result.failure(
+                new GatewayError.SystemError.WebSocketError(
+                    "WebSocket session is closed", 
+                    session.getId())));
+    }
+    
+    /**
+     * ✅ FUNCTIONAL: Handle message send result
+     */
+    private Result<Void, GatewayError> handleMessageSend(
+            Result<Void, GatewayError> result, 
+            Throwable throwable) {
+        
+        return Optional.ofNullable(throwable)
+            .map(t -> Result.<Void, GatewayError>failure(
+                new GatewayError.SystemError.InternalServerError(
+                    "Message send failed: " + t.getMessage(), 
+                    "MESSAGE_SEND_ERROR")))
+            .orElse(result);
+    }
 }

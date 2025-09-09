@@ -1,0 +1,421 @@
+# Kong Ingress Controller Configuration for TradeMaster Event Bus Service
+# Compatible with Kong Ingress Controller 2.x
+
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: trademaster-event-bus-ingress
+  namespace: trademaster
+  annotations:
+    # Kong Ingress Controller
+    kubernetes.io/ingress.class: kong
+    konghq.com/strip-path: "false"
+    konghq.com/preserve-host: "false"
+    
+    # SSL/TLS Configuration
+    cert-manager.io/cluster-issuer: letsencrypt-production
+    konghq.com/protocols: https,http,ws,wss
+    konghq.com/https-redirect-status-code: "301"
+    
+    # Health Check Configuration
+    konghq.com/path: /api/v1/health
+    
+    # Rate Limiting
+    konghq.com/plugins: event-bus-rate-limit,event-bus-cors,event-bus-jwt,event-bus-prometheus,event-bus-websocket-rate-limit
+    
+    # Request/Response Configuration
+    konghq.com/request-buffering: "true"
+    konghq.com/response-buffering: "true"
+    
+  labels:
+    app: trademaster-event-bus-service
+    version: v2
+    environment: production
+spec:
+  tls:
+    - hosts:
+        - events.trademaster.com
+        - staging-events.trademaster.com
+        - ws.trademaster.com
+      secretName: trademaster-events-tls-secret
+  rules:
+    - host: events.trademaster.com
+      http:
+        paths:
+          - path: /event-bus/v2
+            pathType: Prefix
+            backend:
+              service:
+                name: event-bus-service
+                port:
+                  number: 8081
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: event-bus-service
+                port:
+                  number: 8081
+    - host: staging-events.trademaster.com
+      http:
+        paths:
+          - path: /event-bus/v2
+            pathType: Prefix
+            backend:
+              service:
+                name: event-bus-service
+                port:
+                  number: 8081
+          - path: /ws
+            pathType: Prefix
+            backend:
+              service:
+                name: event-bus-service
+                port:
+                  number: 8081
+    - host: ws.trademaster.com
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: event-bus-service
+                port:
+                  number: 8081
+
+---
+# Kong Plugin: Rate Limiting for Event Bus Service
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: event-bus-rate-limit
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+plugin: rate-limiting
+config:
+  minute: 5000      # Higher for event processing
+  hour: 200000      # Event-intensive service
+  day: 4000000      # Large daily capacity
+  policy: local
+  fault_tolerant: true
+  hide_client_headers: false
+  header_name: X-RateLimit-Limit
+  limit_by: consumer
+
+---
+# Kong Plugin: WebSocket Rate Limiting
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: event-bus-websocket-rate-limit
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+plugin: rate-limiting
+config:
+  minute: 600       # 600 WebSocket messages per minute
+  hour: 10000       # 10K messages per hour
+  day: 100000       # 100K messages per day
+  policy: local
+  fault_tolerant: true
+  hide_client_headers: false
+  header_name: X-WS-RateLimit-Limit
+  limit_by: consumer
+
+---
+# Kong Plugin: CORS for Event Bus Service
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: event-bus-cors
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+plugin: cors
+config:
+  origins:
+    - "https://app.trademaster.com"
+    - "https://admin.trademaster.com"
+    - "https://staging.trademaster.com"
+    - "wss://app.trademaster.com"
+    - "ws://localhost:3000"
+  methods:
+    - GET
+    - POST
+    - PUT
+    - DELETE
+    - OPTIONS
+    - HEAD
+  headers:
+    - Accept
+    - Accept-Version
+    - Content-Length
+    - Content-Type
+    - Date
+    - Authorization
+    - X-Auth-Token
+    - X-Correlation-ID
+    - X-Service-API-Key
+    - X-Service-ID
+    - Sec-WebSocket-Protocol
+    - Sec-WebSocket-Key
+    - Sec-WebSocket-Version
+  exposed_headers:
+    - X-Auth-Token
+    - X-Correlation-ID
+    - X-Event-ID
+    - X-RateLimit-Limit
+    - X-RateLimit-Remaining
+    - X-WS-RateLimit-Limit
+  credentials: true
+  max_age: 3600
+  preflight_continue: false
+
+---
+# Kong Plugin: JWT Authentication
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: event-bus-jwt
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+plugin: jwt
+config:
+  uri_param_names:
+    - jwt
+    - token
+  cookie_names:
+    - jwt
+  header_names:
+    - authorization
+    - sec-websocket-protocol
+  claims_to_verify:
+    - exp
+    - iat
+  key_claim_name: iss
+  secret_is_base64: false
+  anonymous: false
+  run_on_preflight: true
+
+---
+# Kong Plugin: Service API Key for Internal Routes
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: event-bus-service-api-key
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+plugin: key-auth
+config:
+  key_names:
+    - X-Service-API-Key
+    - api-key
+  key_in_header: true
+  key_in_query: false
+  key_in_body: false
+  hide_credentials: false
+  anonymous: false
+  run_on_preflight: true
+
+---
+# Kong Plugin: Prometheus Metrics
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: event-bus-prometheus
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+plugin: prometheus
+config:
+  per_consumer: true
+  status_code_metrics: true
+  latency_metrics: true
+  bandwidth_metrics: true
+  upstream_health_metrics: true
+
+---
+# Kong Plugin: Request Size Limiting
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: event-bus-request-size-limit
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+plugin: request-size-limiting
+config:
+  allowed_payload_size: 2048  # 2KB for event payloads
+
+---
+# Kong Plugin: Correlation ID
+apiVersion: configuration.konghq.com/v1
+kind: KongPlugin
+metadata:
+  name: event-bus-correlation-id
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+plugin: correlation-id
+config:
+  header_name: X-Correlation-ID
+  generator: uuid
+  echo_downstream: true
+
+---
+# Kong Consumer: Event Bus Application
+apiVersion: configuration.konghq.com/v1
+kind: KongConsumer
+metadata:
+  name: trademaster-event-app
+  namespace: trademaster
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    app: trademaster-event-bus-service
+username: trademaster-event-app
+custom_id: event-app-001
+
+---
+# Kong Consumer: Trading Service (for internal calls)
+apiVersion: configuration.konghq.com/v1
+kind: KongConsumer
+metadata:
+  name: trading-service-internal
+  namespace: trademaster
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    app: trademaster-event-bus-service
+username: trading-service
+custom_id: trading-service-001
+
+---
+# Kong Consumer: Admin Application
+apiVersion: configuration.konghq.com/v1
+kind: KongConsumer
+metadata:
+  name: trademaster-admin
+  namespace: trademaster
+  annotations:
+    kubernetes.io/ingress.class: kong
+  labels:
+    app: trademaster-event-bus-service
+username: trademaster-admin
+custom_id: admin-001
+
+---
+# Secret: JWT Credentials for Event Application
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trademaster-event-app-jwt
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+type: Opaque
+stringData:
+  kongCredType: jwt
+  key: trademaster-event-app-key
+  algorithm: HS256
+  secret: "${TRADEMASTER_EVENT_JWT_SECRET}"  # Replace with actual secret
+
+---
+# Secret: JWT Credentials for Admin
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trademaster-admin-jwt
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+type: Opaque
+stringData:
+  kongCredType: jwt
+  key: trademaster-admin-key
+  algorithm: HS256
+  secret: "${TRADEMASTER_ADMIN_JWT_SECRET}"  # Replace with actual secret
+
+---
+# Secret: Service API Key for Internal Communication
+apiVersion: v1
+kind: Secret
+metadata:
+  name: trademaster-service-api-key
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+type: Opaque
+stringData:
+  kongCredType: key-auth
+  key: "${TRADEMASTER_SERVICE_API_KEY}"  # Replace with actual service API key
+
+---
+# Kong Upstream: Event Bus Service Health Checks
+apiVersion: configuration.konghq.com/v1
+kind: KongUpstreamPolicy
+metadata:
+  name: event-bus-service-upstream
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+spec:
+  algorithm: round-robin
+  hash_on: none
+  hash_fallback: none
+  healthchecks:
+    active:
+      type: http
+      timeout: 5
+      concurrency: 5
+      http_path: /api/v1/health
+      https_verify_certificate: false
+      healthy:
+        interval: 5
+        http_statuses: [200, 201, 202, 204]
+        successes: 3
+      unhealthy:
+        interval: 5
+        http_statuses: [429, 500, 502, 503, 504]
+        tcp_failures: 3
+        http_failures: 3
+        timeouts: 3
+    passive:
+      type: http
+      healthy:
+        http_statuses: [200, 201, 202, 204, 301, 302, 401, 403, 404]
+        successes: 3
+      unhealthy:
+        http_statuses: [429, 500, 502, 503, 504]
+        tcp_failures: 3
+        http_failures: 3
+        timeouts: 3
+    threshold: 0
+
+---
+# Service Monitor for Prometheus (Kong Metrics)
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: kong-event-bus-service-metrics
+  namespace: trademaster
+  labels:
+    app: trademaster-event-bus-service
+    component: kong-gateway
+spec:
+  selector:
+    matchLabels:
+      app: kong-ingress-controller
+  endpoints:
+    - port: kong-admin
+      path: /metrics
+      interval: 30s
+      scrapeTimeout: 10s
+  namespaceSelector:
+    matchNames:
+      - trademaster
+      - kong-system

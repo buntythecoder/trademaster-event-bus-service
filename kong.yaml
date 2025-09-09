@@ -1,0 +1,540 @@
+# Kong Gateway Configuration for TradeMaster Event Bus Service
+# Compatible with Kong Gateway 3.x and Kong Ingress Controller
+
+_format_version: "3.0"
+
+# ==================== SERVICES ====================
+services:
+  - name: trademaster-event-bus-service
+    protocol: http
+    host: event-bus-service
+    port: 8081
+    path: /api/v1
+    retries: 3
+    connect_timeout: 10000
+    write_timeout: 30000
+    read_timeout: 30000
+    tags:
+      - trademaster
+      - event-bus
+      - production
+
+# ==================== UPSTREAMS ====================
+upstreams:
+  - name: event-bus-service-upstream
+    algorithm: round-robin
+    hash_on: none
+    hash_fallback: none
+    hash_on_cookie_path: /
+    slots: 10000
+    healthchecks:
+      active:
+        type: http
+        timeout: 5
+        concurrency: 5
+        http_path: /api/v1/health
+        https_verify_certificate: false
+        healthy:
+          interval: 5
+          http_statuses: [200, 201, 202, 204]
+          successes: 3
+        unhealthy:
+          interval: 5
+          http_statuses: [429, 500, 502, 503, 504]
+          tcp_failures: 3
+          http_failures: 3
+          timeouts: 3
+      passive:
+        type: http
+        healthy:
+          http_statuses: [200, 201, 202, 204, 301, 302, 401, 403, 404]
+          successes: 3
+        unhealthy:
+          http_statuses: [429, 500, 502, 503, 504]
+          tcp_failures: 3
+          http_failures: 3
+          timeouts: 3
+      threshold: 0
+    tags:
+      - trademaster
+      - event-bus
+    targets:
+      - target: event-bus-service:8081
+        weight: 100
+        tags:
+          - primary
+
+# ==================== ROUTES ====================
+routes:
+  # Main Event Bus API Routes
+  - name: event-bus-api-events
+    service: trademaster-event-bus-service
+    protocols: [http, https]
+    methods: [GET, POST, PUT, DELETE, OPTIONS]
+    paths: ["/events", "/events/.*"]
+    preserve_host: false
+    strip_path: false
+    tags:
+      - events
+      - event-bus
+
+  - name: event-bus-api-subscriptions
+    service: trademaster-event-bus-service
+    protocols: [http, https]
+    methods: [GET, POST, PUT, DELETE, OPTIONS]
+    paths: ["/subscriptions", "/subscriptions/.*"]
+    preserve_host: false
+    strip_path: false
+    tags:
+      - subscriptions
+      - event-bus
+
+  - name: event-bus-api-websocket
+    service: trademaster-event-bus-service
+    protocols: [http, https, ws, wss]
+    methods: [GET, POST, OPTIONS]
+    paths: ["/websocket", "/websocket/.*", "/ws", "/ws/.*"]
+    preserve_host: false
+    strip_path: false
+    tags:
+      - websocket
+      - realtime
+
+  - name: event-bus-api-analytics
+    service: trademaster-event-bus-service
+    protocols: [http, https]
+    methods: [GET, OPTIONS]
+    paths: ["/analytics", "/analytics/.*", "/metrics", "/metrics/.*"]
+    preserve_host: false
+    strip_path: false
+    tags:
+      - analytics
+      - metrics
+
+  # Health Check Routes (Public)
+  - name: event-bus-health-check
+    service: trademaster-event-bus-service
+    protocols: [http, https]
+    methods: [GET, OPTIONS]
+    paths: ["/health", "/gateway/health", "/gateway/ready", "/gateway/alive", "/gateway/status"]
+    preserve_host: false
+    strip_path: false
+    tags:
+      - health
+      - monitoring
+
+  # Internal Service Routes (Service-to-Service)
+  - name: event-bus-internal-api
+    service: trademaster-event-bus-service
+    protocols: [http, https]
+    methods: [GET, POST, PUT, DELETE, OPTIONS]
+    paths: ["/api/internal/.*"]
+    preserve_host: false
+    strip_path: false
+    tags:
+      - internal
+      - service-to-service
+
+  # Admin Routes (Restricted)
+  - name: event-bus-admin
+    service: trademaster-event-bus-service
+    protocols: [http, https]
+    methods: [GET, POST, OPTIONS]
+    paths: ["/admin", "/admin/.*"]
+    preserve_host: false
+    strip_path: false
+    tags:
+      - admin
+      - restricted
+
+# ==================== PLUGINS ====================
+plugins:
+  # CORS Plugin (Global)
+  - name: cors
+    config:
+      origins:
+        - "https://app.trademaster.com"
+        - "https://admin.trademaster.com"
+        - "http://localhost:3000"  # Development
+        - "http://localhost:5173"  # Vite development
+      methods:
+        - GET
+        - POST
+        - PUT
+        - DELETE
+        - OPTIONS
+        - HEAD
+      headers:
+        - Accept
+        - Accept-Version
+        - Content-Length
+        - Content-MD5
+        - Content-Type
+        - Date
+        - Authorization
+        - X-Auth-Token
+        - X-Correlation-ID
+        - X-Service-API-Key
+        - X-Service-ID
+      exposed_headers:
+        - X-Auth-Token
+        - X-Correlation-ID
+        - X-Event-ID
+        - X-RateLimit-Limit
+        - X-RateLimit-Remaining
+      credentials: true
+      max_age: 3600
+      preflight_continue: false
+    tags:
+      - cors
+      - global
+
+  # Rate Limiting Plugin (Global)
+  - name: rate-limiting
+    config:
+      minute: 5000      # Higher for event processing
+      hour: 200000      # Event-intensive service
+      day: 4000000      # Large daily capacity
+      month: 100000000  # Monthly capacity
+      year: 1200000000  # Yearly capacity
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+      header_name: X-RateLimit-Limit
+      limit_by: consumer
+    tags:
+      - rate-limiting
+      - global
+
+  # Request ID Plugin
+  - name: correlation-id
+    config:
+      header_name: X-Correlation-ID
+      generator: uuid
+      echo_downstream: true
+    tags:
+      - correlation
+      - tracing
+
+  # Prometheus Metrics Plugin
+  - name: prometheus
+    config:
+      per_consumer: true
+      status_code_metrics: true
+      latency_metrics: true
+      bandwidth_metrics: true
+      upstream_health_metrics: true
+    tags:
+      - metrics
+      - monitoring
+
+  # Request Logging Plugin
+  - name: http-log
+    config:
+      http_endpoint: "http://log-aggregator:8080/kong-logs"
+      method: POST
+      timeout: 1000
+      keepalive: 1000
+      content_type: application/json
+      flush_timeout: 2
+      retry_count: 3
+      queue_size: 100
+    tags:
+      - logging
+      - audit
+
+  # JWT Authentication Plugin (Applied to event bus routes)
+  - name: jwt
+    route: event-bus-api-events
+    config:
+      uri_param_names:
+        - jwt
+      cookie_names:
+        - jwt
+      header_names:
+        - authorization
+      claims_to_verify:
+        - exp
+        - iat
+      key_claim_name: iss
+      secret_is_base64: false
+      anonymous: false
+      run_on_preflight: true
+    tags:
+      - auth
+      - jwt
+
+  - name: jwt
+    route: event-bus-api-subscriptions
+    config:
+      uri_param_names:
+        - jwt
+      cookie_names:
+        - jwt
+      header_names:
+        - authorization
+      claims_to_verify:
+        - exp
+        - iat
+      key_claim_name: iss
+      secret_is_base64: false
+      anonymous: false
+      run_on_preflight: true
+    tags:
+      - auth
+      - jwt
+
+  - name: jwt
+    route: event-bus-api-websocket
+    config:
+      uri_param_names:
+        - jwt
+        - token
+      cookie_names:
+        - jwt
+      header_names:
+        - authorization
+        - sec-websocket-protocol
+      claims_to_verify:
+        - exp
+        - iat
+      key_claim_name: iss
+      secret_is_base64: false
+      anonymous: false
+      run_on_preflight: true
+    tags:
+      - auth
+      - jwt
+      - websocket
+
+  # Service API Key Authentication for Internal Routes
+  - name: key-auth
+    route: event-bus-internal-api
+    config:
+      key_names:
+        - X-Service-API-Key
+        - api-key
+      key_in_header: true
+      key_in_query: false
+      key_in_body: false
+      hide_credentials: false
+      anonymous: false
+      run_on_preflight: true
+    tags:
+      - auth
+      - service-api-key
+      - internal
+
+  # Enhanced Rate Limiting for Event Processing
+  - name: rate-limiting
+    route: event-bus-api-events
+    config:
+      minute: 1000     # 1000 events per minute per user
+      hour: 50000      # 50000 events per hour per user
+      day: 1000000     # 1M events per day per user
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+      limit_by: consumer
+    tags:
+      - rate-limiting
+      - events
+
+  # WebSocket Rate Limiting
+  - name: rate-limiting
+    route: event-bus-api-websocket
+    config:
+      minute: 600      # 600 WebSocket messages per minute
+      hour: 10000      # 10K messages per hour
+      day: 100000      # 100K messages per day
+      policy: local
+      fault_tolerant: true
+      hide_client_headers: false
+      limit_by: consumer
+    tags:
+      - rate-limiting
+      - websocket
+
+  # Response Rate Limiting (Circuit Breaker)
+  - name: response-ratelimiting
+    route: event-bus-api-events
+    config:
+      limits:
+        video:
+          minute: 50
+          hour: 1000
+      block_on_first_violation: false
+      fault_tolerant: true
+      hide_client_headers: false
+    tags:
+      - response-rate-limiting
+      - circuit-breaker
+
+  # Request Size Limiting
+  - name: request-size-limiting
+    config:
+      allowed_payload_size: 2048  # 2KB for event payloads
+    tags:
+      - request-size
+      - security
+
+  # Admin Authentication (Admin routes only)
+  - name: key-auth
+    route: event-bus-admin
+    config:
+      key_names:
+        - X-API-Key
+        - api-key
+      key_in_header: true
+      key_in_query: false
+      key_in_body: false
+      hide_credentials: true
+      anonymous: false
+      run_on_preflight: true
+    tags:
+      - auth
+      - admin
+
+  # IP Restriction for Admin
+  - name: ip-restriction
+    route: event-bus-admin
+    config:
+      allow:
+        - "10.0.0.0/8"      # Internal network
+        - "172.16.0.0/12"   # Docker networks
+        - "192.168.0.0/16"  # Private networks
+        - "127.0.0.1"       # Localhost
+      deny: []
+      message: "Access denied from this IP"
+    tags:
+      - ip-restriction
+      - admin
+      - security
+
+  # Request Termination for Health Checks (Optimization)
+  - name: request-termination
+    route: event-bus-health-check
+    config:
+      status_code: 200
+      content_type: application/json
+      body: '{"status":"UP","service":"event-bus-service","version":"2.0.0","timestamp":"{{ now }}"}'
+      echo: false
+      trigger: null
+    tags:
+      - optimization
+      - health
+
+# ==================== CONSUMERS ====================
+consumers:
+  - username: trademaster-event-app
+    custom_id: event-app-001
+    tags:
+      - application
+      - event-processing
+
+  - username: trademaster-admin
+    custom_id: admin-001
+    tags:
+      - admin
+      - backend
+
+  - username: trademaster-monitor
+    custom_id: monitor-001
+    tags:
+      - monitoring
+      - system
+
+  - username: trading-service
+    custom_id: trading-service-001
+    tags:
+      - service
+      - internal
+
+  - username: notification-service
+    custom_id: notification-service-001
+    tags:
+      - service
+      - internal
+
+  - username: risk-service
+    custom_id: risk-service-001
+    tags:
+      - service
+      - internal
+
+# ==================== CONSUMER CREDENTIALS ====================
+jwt_secrets:
+  - consumer: trademaster-event-app
+    key: trademaster-event-app-key
+    algorithm: HS256
+    secret: "${TRADEMASTER_EVENT_JWT_SECRET}"
+    tags:
+      - jwt-secret
+      - app
+
+  - consumer: trademaster-admin
+    key: trademaster-admin-key
+    algorithm: HS256
+    secret: "${TRADEMASTER_ADMIN_JWT_SECRET}"
+    tags:
+      - jwt-secret
+      - admin
+
+keyauth_credentials:
+  - consumer: trademaster-admin
+    key: "${TRADEMASTER_ADMIN_API_KEY}"
+    tags:
+      - api-key
+      - admin
+
+  - consumer: trademaster-monitor
+    key: "${TRADEMASTER_MONITOR_API_KEY}"
+    tags:
+      - api-key
+      - monitor
+
+  - consumer: trading-service
+    key: "${TRADEMASTER_SERVICE_API_KEY}"
+    tags:
+      - api-key
+      - service
+
+  - consumer: notification-service
+    key: "${TRADEMASTER_SERVICE_API_KEY}"
+    tags:
+      - api-key
+      - service
+
+  - consumer: risk-service
+    key: "${TRADEMASTER_SERVICE_API_KEY}"
+    tags:
+      - api-key
+      - service
+
+# ==================== CERTIFICATES (HTTPS) ====================
+certificates:
+  - cert: |
+      -----BEGIN CERTIFICATE-----
+      # Your SSL certificate here
+      -----END CERTIFICATE-----
+    key: |
+      -----BEGIN PRIVATE KEY-----
+      # Your private key here
+      -----END PRIVATE KEY-----
+    tags:
+      - ssl
+      - https
+
+# ==================== SNIs ====================
+snis:
+  - name: events.trademaster.com
+    certificate: certificates[0]
+    tags:
+      - domain
+      - production
+
+  - name: staging-events.trademaster.com
+    certificate: certificates[0]
+    tags:
+      - domain
+      - staging

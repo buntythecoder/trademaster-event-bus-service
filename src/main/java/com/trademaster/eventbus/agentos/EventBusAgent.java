@@ -1,7 +1,7 @@
 package com.trademaster.eventbus.agentos;
 
-import com.trademaster.eventbus.domain.Result;
-import com.trademaster.eventbus.domain.GatewayError;
+import com.trademaster.eventbus.functional.Result;
+import com.trademaster.eventbus.functional.GatewayError;
 import com.trademaster.eventbus.service.PerformanceMonitoringService;
 import com.trademaster.eventbus.service.WebSocketConnectionHandler;
 import com.trademaster.eventbus.service.CircuitBreakerService;
@@ -79,8 +79,8 @@ public class EventBusAgent {
             } catch (Exception e) {
                 status = AgentStatus.FAILED;
                 log.error("Agent initialization failed", e);
-                return Result.failure(GatewayError.of(GatewayError.ErrorType.AGENT_INITIALIZATION_FAILED, 
-                    e.getMessage(), "agent-init-" + System.currentTimeMillis(), agentId));
+                return Result.failure(new GatewayError.SystemError.InternalServerError(
+                    "Agent initialization failed: " + e.getMessage(), "AGENT_INIT_ERROR"));
             }
         }, java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
     }
@@ -153,8 +153,8 @@ public class EventBusAgent {
                 
             } catch (Exception e) {
                 log.error("Agent health check failed", e);
-                return Result.failure(GatewayError.of(GatewayError.ErrorType.HEALTH_CHECK_FAILED,
-                    e.getMessage(), "health-check-" + System.currentTimeMillis(), agentId));
+                return Result.failure(new GatewayError.SystemError.InternalServerError(
+                    "Health check failed: " + e.getMessage(), "HEALTH_CHECK_ERROR"));
             }
         }, java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
     }
@@ -173,7 +173,7 @@ public class EventBusAgent {
                     );
                     case "GET_HEALTH" -> MCPResponse.success(
                         message.id(),
-                        Map.of("health", getAgentHealth().join().orElse(null))
+                        Map.of("health", getAgentHealth().join().fold(health -> health, error -> "Health unavailable: " + error.getMessage()))
                     );
                     case "GET_PERFORMANCE" -> MCPResponse.success(
                         message.id(),
@@ -198,8 +198,8 @@ public class EventBusAgent {
                 
             } catch (Exception e) {
                 log.error("MCP message handling failed: type={}, id={}", message.type(), message.id(), e);
-                return Result.failure(GatewayError.of(GatewayError.ErrorType.MCP_MESSAGE_FAILED,
-                    e.getMessage(), "mcp-message-" + System.currentTimeMillis(), agentId));
+                return Result.failure(new GatewayError.SystemError.InternalServerError(
+                    "MCP message processing failed: " + e.getMessage(), "MCP_MESSAGE_ERROR"));
             }
         }, java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
     }
@@ -236,8 +236,8 @@ public class EventBusAgent {
                 
             } catch (Exception e) {
                 log.error("Agent command execution failed: type={}", command.type(), e);
-                return Result.failure(GatewayError.of(GatewayError.ErrorType.COMMAND_EXECUTION_FAILED,
-                    e.getMessage(), "command-exec-" + System.currentTimeMillis(), agentId));
+                return Result.failure(new GatewayError.SystemError.InternalServerError(
+                    "Command execution failed: " + e.getMessage(), "COMMAND_EXEC_ERROR"));
             }
         }, java.util.concurrent.Executors.newVirtualThreadPerTaskExecutor());
     }

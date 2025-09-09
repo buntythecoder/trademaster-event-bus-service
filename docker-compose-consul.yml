@@ -1,0 +1,271 @@
+# TradeMaster Event Bus Service - Consul Integration Docker Compose
+# Production-ready Consul cluster with Event Bus Service
+
+version: '3.8'
+
+services:
+  # Consul Agent (Single node for development, cluster for production)
+  consul-server:
+    image: consul:1.17.0
+    container_name: consul-server
+    hostname: consul-server
+    ports:
+      - "8500:8500"
+      - "8600:8600/udp"
+    volumes:
+      - consul-data:/consul/data
+      - consul-config:/consul/config
+    environment:
+      - CONSUL_BIND_INTERFACE=eth0
+      - CONSUL_LOCAL_CONFIG={"datacenter":"trademaster-dc","server":true,"bootstrap_expect":1,"ui_config":{"enabled":true},"connect":{"enabled":true},"log_level":"INFO","node_name":"consul-server-1"}
+    command: >
+      consul agent
+      -server
+      -bootstrap-expect=1
+      -datacenter=trademaster-dc
+      -data-dir=/consul/data
+      -config-dir=/consul/config
+      -ui
+      -bind=0.0.0.0
+      -client=0.0.0.0
+      -retry-join=consul-server
+      -log-level=INFO
+    networks:
+      - trademaster-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "consul", "members"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 10s
+
+  # PostgreSQL Database
+  postgres-eventbus:
+    image: postgres:15.5-alpine
+    container_name: postgres-eventbus
+    hostname: postgres-eventbus
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: trademaster_eventbus
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres-eventbus-data:/var/lib/postgresql/data
+      - ./src/main/resources/db/migration:/docker-entrypoint-initdb.d
+    networks:
+      - trademaster-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d trademaster_eventbus"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for Caching and Session Management
+  redis-eventbus:
+    image: redis:7.2-alpine
+    container_name: redis-eventbus
+    hostname: redis-eventbus
+    ports:
+      - "6379:6379"
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 256mb
+      --maxmemory-policy allkeys-lru
+      --timeout 60
+      --tcp-keepalive 300
+    volumes:
+      - redis-eventbus-data:/data
+    networks:
+      - trademaster-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Apache Kafka
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    container_name: kafka-eventbus
+    hostname: kafka
+    ports:
+      - "9092:9092"
+      - "9093:9093"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092,PLAINTEXT_HOST://localhost:9092
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "false"
+      KAFKA_LOG_RETENTION_HOURS: 24
+      KAFKA_LOG_RETENTION_BYTES: 1073741824
+      KAFKA_NUM_PARTITIONS: 12
+      KAFKA_COMPRESSION_TYPE: lz4
+    volumes:
+      - kafka-data:/var/lib/kafka/data
+    networks:
+      - trademaster-network
+    depends_on:
+      - zookeeper
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "kafka-broker-api-versions", "--bootstrap-server", "localhost:9092"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # Zookeeper for Kafka
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.5.0
+    container_name: zookeeper-eventbus
+    hostname: zookeeper
+    ports:
+      - "2181:2181"
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+      ZOOKEEPER_SYNC_LIMIT: 2
+    volumes:
+      - zookeeper-data:/var/lib/zookeeper/data
+      - zookeeper-logs:/var/lib/zookeeper/log
+    networks:
+      - trademaster-network
+    restart: unless-stopped
+
+  # Prometheus for Metrics
+  prometheus:
+    image: prom/prometheus:v2.47.0
+    container_name: prometheus-eventbus
+    hostname: prometheus
+    ports:
+      - "9090:9090"
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+      - '--storage.tsdb.retention.time=15d'
+      - '--web.enable-lifecycle'
+      - '--web.enable-admin-api'
+    volumes:
+      - prometheus-data:/prometheus
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - trademaster-network
+    restart: unless-stopped
+    depends_on:
+      - consul-server
+
+  # Event Bus Service
+  event-bus-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        JAR_FILE: build/libs/event-bus-service-*.jar
+    container_name: event-bus-service
+    hostname: event-bus-service
+    ports:
+      - "8099:8099"
+    environment:
+      # Spring Profiles
+      SPRING_PROFILES_ACTIVE: docker,consul
+      
+      # Consul Configuration
+      CONSUL_HOST: consul-server
+      CONSUL_PORT: 8500
+      CONSUL_SCHEME: http
+      
+      # Database Configuration
+      DATABASE_URL: jdbc:postgresql://postgres-eventbus:5432/trademaster_eventbus
+      DATABASE_USERNAME: postgres
+      DATABASE_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+      
+      # Redis Configuration
+      REDIS_HOST: redis-eventbus
+      REDIS_PORT: 6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+      
+      # Kafka Configuration
+      KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      
+      # Security Configuration
+      JWT_SECRET: ${JWT_SECRET:-trademaster-event-bus-secret-key-docker}
+      
+      # SSL Configuration
+      SSL_ENABLED: false
+      
+      # JVM Configuration
+      JAVA_OPTS: >
+        --enable-preview
+        -XX:+UseZGC
+        -XX:+UnlockExperimentalVMOptions
+        -XX:+UseTransparentHugePages
+        -Xms512m
+        -Xmx2g
+        -XX:MetaspaceSize=128m
+        -XX:MaxDirectMemorySize=256m
+        -Djava.security.egd=file:/dev/./urandom
+        -Dspring.profiles.active=docker,consul
+        
+      # Performance Configuration
+      SERVER_TOMCAT_THREADS_MAX: 1000
+      SPRING_THREADS_VIRTUAL_ENABLED: true
+    volumes:
+      - event-bus-logs:/app/logs
+    networks:
+      - trademaster-network
+    depends_on:
+      consul-server:
+        condition: service_healthy
+      postgres-eventbus:
+        condition: service_healthy
+      redis-eventbus:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8099/event-bus/actuator/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+
+volumes:
+  consul-data:
+    driver: local
+  consul-config:
+    driver: local
+  postgres-eventbus-data:
+    driver: local
+  redis-eventbus-data:
+    driver: local
+  kafka-data:
+    driver: local
+  zookeeper-data:
+    driver: local
+  zookeeper-logs:
+    driver: local
+  prometheus-data:
+    driver: local
+  event-bus-logs:
+    driver: local
+
+networks:
+  trademaster-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

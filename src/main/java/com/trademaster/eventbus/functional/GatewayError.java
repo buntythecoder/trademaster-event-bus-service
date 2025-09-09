@@ -26,7 +26,9 @@ public sealed interface GatewayError permits
     GatewayError.MessageError,
     GatewayError.SystemError,
     GatewayError.ProcessingError,
-    GatewayError.ServiceError {
+    GatewayError.ServiceError,
+    GatewayError.ValidationError,
+    GatewayError.SecurityError {
     
     // ✅ FUNCTIONAL: Error message accessor
     String getMessage();
@@ -47,7 +49,7 @@ public sealed interface GatewayError permits
     
     // ✅ AUTHENTICATION ERRORS: JWT and session related
     sealed interface AuthenticationError extends GatewayError permits
-        InvalidToken, ExpiredToken, MissingToken, InvalidCredentials, InvalidSession {
+        InvalidToken, ExpiredToken, MissingToken, InvalidCredentials, InvalidSession, SessionExpired, TokenGenerationFailed {
     }
     
     record InvalidToken(String message, String tokenType) implements AuthenticationError {
@@ -100,6 +102,28 @@ public sealed interface GatewayError permits
         
         @Override
         public String getErrorCode() { return "AUTH_005_INVALID_SESSION"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.HIGH; }
+    }
+    
+    record SessionExpired(String message, java.time.Instant expiredAt) implements AuthenticationError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "AUTH_006_SESSION_EXPIRED"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.MEDIUM; }
+    }
+    
+    record TokenGenerationFailed(String message, String reason) implements AuthenticationError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "AUTH_007_TOKEN_GENERATION_FAILED"; }
         
         @Override
         public ErrorSeverity getSeverity() { return ErrorSeverity.HIGH; }
@@ -329,10 +353,59 @@ public sealed interface GatewayError permits
         public ErrorSeverity getSeverity() { return ErrorSeverity.MEDIUM; }
     }
     
+    // ✅ VALIDATION ERRORS: Input validation issues
+    sealed interface ValidationError extends GatewayError permits
+        InvalidInput, InvalidValidationFormat, InvalidType, ValidationFailed {
+    }
+    
+    record InvalidInput(String message, String field, String value) implements ValidationError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "VAL_001_INVALID_INPUT"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.MEDIUM; }
+    }
+    
+    record InvalidValidationFormat(String message, String field) implements ValidationError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "VAL_004_INVALID_FORMAT"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.MEDIUM; }
+    }
+    
+    record ValidationFailed(String message, java.util.List<String> errors) implements ValidationError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "VAL_002_VALIDATION_FAILED"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.MEDIUM; }
+    }
+    
+    record InvalidType(String message, String expectedType, String actualType) implements ValidationError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "VAL_003_INVALID_TYPE"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.MEDIUM; }
+    }
+    
     // ✅ SYSTEM ERRORS: Internal service failures
     sealed interface SystemError extends GatewayError permits
         ServiceUnavailable, CircuitBreakerOpen, InternalServerError, ConfigurationError,
-        DatabaseError, MessageQueueError, ExternalServiceError, WebSocketError, SystemProcessingError {
+        DatabaseError, MessageQueueError, ExternalServiceError, WebSocketError, SystemProcessingError, TimeoutError, ResourceExhaustion {
     }
     
     // ✅ PROCESSING ERRORS: Message and workflow processing
@@ -461,6 +534,55 @@ public sealed interface GatewayError permits
         
         @Override
         public String getErrorCode() { return "SYS_009_PROCESSING_ERROR"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.HIGH; }
+    }
+    
+    record TimeoutError(String message, java.time.Duration timeout) implements SystemError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "SYS_010_TIMEOUT_ERROR"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.HIGH; }
+    }
+    
+    record ResourceExhaustion(String message, String resourceType) implements SystemError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "SYS_011_RESOURCE_EXHAUSTION"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.CRITICAL; }
+    }
+    
+    // ✅ SECURITY ERRORS: Security related issues
+    sealed interface SecurityError extends GatewayError permits
+        Unauthorized, Forbidden {
+    }
+    
+    record Unauthorized(String message, String resource) implements SecurityError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "SEC_001_UNAUTHORIZED"; }
+        
+        @Override
+        public ErrorSeverity getSeverity() { return ErrorSeverity.HIGH; }
+    }
+    
+    record Forbidden(String message, String resource) implements SecurityError {
+        @Override
+        public String getMessage() { return message; }
+        
+        @Override
+        public String getErrorCode() { return "SEC_002_FORBIDDEN"; }
         
         @Override
         public ErrorSeverity getSeverity() { return ErrorSeverity.HIGH; }
