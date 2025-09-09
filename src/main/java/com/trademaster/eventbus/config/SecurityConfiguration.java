@@ -1,5 +1,6 @@
 package com.trademaster.eventbus.config;
 
+import com.trademaster.eventbus.security.ServiceApiKeyFilter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -9,7 +10,7 @@ import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
-import org.springframework.security.web.header.writers.StaticHeadersWriter;
+import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.web.cors.CorsConfiguration;
 import org.springframework.web.cors.CorsConfigurationSource;
 import org.springframework.web.cors.UrlBasedCorsConfigurationSource;
@@ -18,21 +19,12 @@ import java.util.Arrays;
 import java.util.List;
 
 /**
- * ✅ ZERO TRUST SECURITY: Production-Ready Security Configuration
+ * Security Configuration for Event Bus Service
  * 
- * MANDATORY COMPLIANCE:
- * - Rule #6: Zero Trust Security with tiered access control
- * - Rule #3: Functional programming patterns
- * - Rule #15: Structured logging and security monitoring
- * 
- * SECURITY PRINCIPLES:
- * - External access requires full security stack (SecurityFacade + SecurityMediator)
- * - Internal service-to-service uses simple constructor injection
- * - Default deny with explicit grants only
- * - Comprehensive security headers with CSP
- * - JWT authentication with role-based authorization
- * 
- * Cognitive Complexity: ≤7 per method, ≤15 total per class
+ * Configures Spring Security to work with ServiceApiKeyFilter:
+ * - Public endpoints: /health, /actuator/health, /actuator/info, /actuator/prometheus
+ * - Internal API endpoints: Authenticated by ServiceApiKeyFilter
+ * - All other endpoints: Deny by default
  */
 @Configuration
 @EnableWebSecurity
@@ -40,72 +32,58 @@ import java.util.List;
 @Slf4j
 public class SecurityConfiguration {
 
+    private final ServiceApiKeyFilter serviceApiKeyFilter;
+
     @Value("${agentos.security.allowed-origins:http://localhost:3000,http://localhost:5173}")
     private String[] allowedOrigins;
 
-    /**
-     * ✅ FUNCTIONAL: Configure security filter chain
-     * Cognitive Complexity: 6
-     */
     @Bean
     public SecurityFilterChain filterChain(HttpSecurity http) throws Exception {
-        log.info("Configuring Zero Trust Security with CORS origins: {}", Arrays.toString(allowedOrigins));
+        log.info("Configuring Security with ServiceApiKeyFilter");
         
         return http
-            // ✅ SECURITY: Disable CSRF for stateless JWT authentication
+            // Disable CSRF for stateless API
             .csrf(csrf -> csrf.disable())
             
-            // ✅ SECURITY: Configure CORS with restricted origins
+            // Configure CORS
             .cors(cors -> cors.configurationSource(corsConfigurationSource()))
             
-            // ✅ SECURITY: Stateless session management
+            // Stateless session management
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             
-            // ✅ SECURITY: Zero Trust authorization (Default Deny)
+            // Configure authorization
             .authorizeHttpRequests(authz -> authz
-                // Public endpoints
-                .requestMatchers("/", "/health", "/actuator/health", "/actuator/prometheus").permitAll()
-                .requestMatchers("/api/v1/public/**").permitAll()
-                .requestMatchers("/websocket/**").permitAll() // WebSocket authentication handled separately
+                // Public health and monitoring endpoints (MUST BE FIRST - order matters!)
+                .requestMatchers("/actuator/health", "/actuator/prometheus", "/actuator/info").permitAll()
+                .requestMatchers("/event-bus/actuator/health", "/event-bus/actuator/prometheus", "/event-bus/actuator/info").permitAll()
+                .requestMatchers("/api/internal/*/actuator/health", "/api/internal/*/actuator/prometheus", "/api/internal/*/actuator/info").permitAll()
+                .requestMatchers("/health").permitAll()
                 
-                // Admin endpoints
-                .requestMatchers("/actuator/**").hasRole("ADMIN")
-                .requestMatchers("/api/v1/**").authenticated()
+                // Internal API endpoints - must allow for ServiceApiKeyFilter to process
+                .requestMatchers("/api/internal/**").hasRole("SERVICE")
+                
+                // All other requests denied
                 .anyRequest().denyAll())
             
-            // ✅ SECURITY: Security headers
-            .headers(headers -> headers
-                .frameOptions(frame -> frame.deny())
-                .contentTypeOptions(content -> content.disable())
-                .httpStrictTransportSecurity(hsts -> hsts
-                    .maxAgeInSeconds(31536000)
-                    .includeSubDomains(true)
-                    .preload(true))
-                .addHeaderWriter(new StaticHeadersWriter("Content-Security-Policy", 
-                    "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self'; connect-src 'self' wss://trademaster.com wss://app.trademaster.com")))
+            // Add ServiceApiKeyFilter before Spring Security authentication
+            .addFilterBefore(serviceApiKeyFilter, UsernamePasswordAuthenticationFilter.class)
             
             .build();
     }
 
-    /**
-     * ✅ FUNCTIONAL: Configure CORS for frontend integration
-     * Cognitive Complexity: 3
-     */
     @Bean
     public CorsConfigurationSource corsConfigurationSource() {
         CorsConfiguration configuration = new CorsConfiguration();
         
-        // ✅ SECURITY: Restrict origins to known frontends only
         configuration.setAllowedOriginPatterns(Arrays.asList(allowedOrigins));
         configuration.setAllowedMethods(Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"));
         configuration.setAllowedHeaders(Arrays.asList("*"));
         configuration.setAllowCredentials(true);
-        configuration.setMaxAge(3600L); // 1 hour preflight cache
+        configuration.setMaxAge(3600L);
         
         UrlBasedCorsConfigurationSource source = new UrlBasedCorsConfigurationSource();
         source.registerCorsConfiguration("/**", configuration);
         
-        log.debug("CORS configuration registered for origins: {}", Arrays.toString(allowedOrigins));
         return source;
     }
 }
