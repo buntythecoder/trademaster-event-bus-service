@@ -1,6 +1,7 @@
 package com.trademaster.eventbus.client;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
@@ -33,6 +34,7 @@ import java.util.concurrent.CompletableFuture;
 public class InternalServiceClient {
     
     private final RestTemplate restTemplate;
+    private final RestTemplate circuitBreakerRestTemplate;
     
     @Value("${trademaster.security.service.api-key}")
     private String serviceApiKey;
@@ -49,8 +51,16 @@ public class InternalServiceClient {
     @Value("${trademaster.services.risk-service.url:http://risk-service:8085}")
     private String riskServiceUrl;
     
-    public InternalServiceClient() {
-        this.restTemplate = new RestTemplate();
+    /**
+     * ✅ CONSTRUCTOR INJECTION: Use configured RestTemplate with connection pooling
+     * Primary RestTemplate has connection pooling configured via HttpClientConfiguration
+     * Circuit breaker RestTemplate provides additional resilience for external calls
+     */
+    public InternalServiceClient(RestTemplate restTemplate, 
+                               @Qualifier("circuitBreakerRestTemplate") RestTemplate circuitBreakerRestTemplate) {
+        this.restTemplate = restTemplate;
+        this.circuitBreakerRestTemplate = circuitBreakerRestTemplate;
+        log.info("✅ InternalServiceClient initialized with connection pooling");
     }
     
     /**
