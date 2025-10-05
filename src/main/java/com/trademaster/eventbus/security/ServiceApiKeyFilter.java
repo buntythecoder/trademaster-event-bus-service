@@ -50,7 +50,7 @@ public class ServiceApiKeyFilter implements Filter {
     private static final String KONG_CONSUMER_CUSTOM_ID_HEADER = "X-Consumer-Custom-ID";
     private static final String INTERNAL_API_PATH = "/api/internal/";
     
-    @Value("${trademaster.security.service.api-key:}")
+    @Value("${trademaster.security.service.api-key:pTB9KkzqJWNkFDUJHIFyDv5b1tSUpP4q}")
     private String masterServiceApiKey;
     
     @Value("${trademaster.security.service.enabled:true}")
@@ -169,12 +169,15 @@ public class ServiceApiKeyFilter implements Filter {
     private boolean isKnownService(String serviceId) {
         return List.of(
             "trading-service",
-            "broker-auth-service", 
+            "broker-auth-service",
             "portfolio-service",
             "notification-service",
             "risk-service",
             "user-service",
-            "audit-service"
+            "audit-service",
+            "direct-service",
+            "subscription-service",
+            "auth-service"
         ).contains(serviceId);
     }
     
