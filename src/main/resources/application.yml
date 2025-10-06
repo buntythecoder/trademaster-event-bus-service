@@ -27,7 +27,7 @@ spring:
   
   # ✅ CONSUL CONFIG IMPORT (MANDATORY for Spring Boot 2.4+)
   config:
-    import: "consul:"
+    import: "optional:consul:"
   
   # ✅ Allow bean definition overriding for Consul health indicator
   main:
@@ -262,6 +262,19 @@ trademaster:
     audit-service:
       url: ${AUDIT_SERVICE_URL:http://audit-service:8087}
 
+  # HTTP Client Configuration
+  http:
+    connection-pool:
+      max-total: ${HTTP_POOL_MAX_TOTAL:50}
+      max-per-route: ${HTTP_POOL_MAX_PER_ROUTE:25}
+      validate-after-inactivity: ${HTTP_POOL_VALIDATE_AFTER_INACTIVITY:2000}
+    timeout:
+      connection: ${HTTP_TIMEOUT_CONNECTION:5000}
+      socket: ${HTTP_TIMEOUT_SOCKET:10000}
+      request: ${HTTP_TIMEOUT_REQUEST:8000}
+    keep-alive:
+      duration: ${HTTP_KEEP_ALIVE_DURATION:30000}
+
 # ✅ OPENAPI/SWAGGER CONFIGURATION
 springdoc:
   api-docs:
@@ -391,19 +404,6 @@ performance:
     caffeine:
       spec: maximumSize=10000,expireAfterWrite=15m
 
-# TradeMaster HTTP Client Configuration
-trademaster:
-  http:
-    connection-pool:
-      max-total: ${HTTP_POOL_MAX_TOTAL:50}
-      max-per-route: ${HTTP_POOL_MAX_PER_ROUTE:25}
-      validate-after-inactivity: ${HTTP_POOL_VALIDATE_AFTER_INACTIVITY:2000}
-    timeout:
-      connection: ${HTTP_TIMEOUT_CONNECTION:5000}
-      socket: ${HTTP_TIMEOUT_SOCKET:10000}
-      request: ${HTTP_TIMEOUT_REQUEST:8000}
-    keep-alive:
-      duration: ${HTTP_KEEP_ALIVE_DURATION:30000}
 
 # Error Handling
 error:
